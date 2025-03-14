@@ -43,5 +43,7 @@ export function processOptions(
       : 5,
     enableCache: rawOptions.cache !== false, // 默认启用缓存，只有明确设置 --no-cache 才禁用
     cacheDir: rawOptions.cacheDir || process.env.CACHE_DIR || defaultCacheDir,
+    extractTerms: rawOptions.extractTerms === true, // 默认禁用术语提取
+    useTerminology: rawOptions.useTerminology !== false, // 如果提取了术语，默认启用术语表
   };
 }

@@ -22,6 +22,14 @@ export interface TranslationOptions {
   concurrentRequests?: number;
   enableCache?: boolean;
   cacheDir?: string;
+  extractTerms?: boolean;
+  useTerminology?: boolean;
+}
+
+// 术语表接口
+export interface TerminologyEntry {
+  original: string;
+  translated: string;
 }
 
 // CLI options
@@ -38,4 +46,6 @@ export interface CliOptions {
   concurrentRequests: number;
   enableCache: boolean;
   cacheDir: string;
+  extractTerms: boolean;
+  useTerminology: boolean;
 }

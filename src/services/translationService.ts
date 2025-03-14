@@ -1,6 +1,6 @@
 import OpenAI from 'openai'
 
-import { TranslationOptions } from '../types'
+import { TerminologyEntry, TranslationOptions } from '../types'
 import { CacheService } from './cacheService'
 
 /**
@@ -13,6 +13,7 @@ export class TranslationService {
   private lastCacheHits: number = 0;
   private lastTotalTexts: number = 0;
   private lastBatchesCount: number = 0;
+  private terminology: TerminologyEntry[] = []; // 术语表
 
   /**
    * Initialize the translation service
@@ -67,6 +68,8 @@ export class TranslationService {
       concurrentRequests,
       enableCache,
       cacheDir,
+      extractTerms,
+      useTerminology,
     } = options;
 
     // 使用传入的模型
@@ -89,13 +92,6 @@ export class TranslationService {
         baseURL: baseUrl,
       });
     }
-
-    // Prepare the system prompt
-    const systemPrompt = this.createSystemPrompt(
-      targetLanguage,
-      preserveFormatting === undefined ? true : preserveFormatting,
-      sourceLanguage
-    );
 
     // 检查缓存并过滤需要翻译的文本
     const translationResults: string[] = new Array(texts.length);
@@ -147,6 +143,25 @@ export class TranslationService {
     // 存储批次信息而不是直接输出
     this.lastBatchesCount = batches.length;
 
+    // 如果启用了术语提取，先提取并翻译术语
+    if (extractTerms) {
+      await this.extractAndTranslateTerms(
+        batches,
+        sourceLanguage,
+        targetLanguage,
+        modelToUse,
+        preserveFormatting === undefined ? true : preserveFormatting
+      );
+    }
+
+    // Prepare the system prompt
+    const systemPrompt = this.createSystemPrompt(
+      targetLanguage,
+      preserveFormatting === undefined ? true : preserveFormatting,
+      sourceLanguage,
+      useTerminology ? this.terminology : undefined
+    );
+
     // 翻译未缓存的文本
     // 使用并行处理批次，默认并发数为1（相当于顺序处理）
     const parallelRequests = concurrentRequests || 1;
@@ -182,6 +197,166 @@ export class TranslationService {
     }
 
     return translationResults;
+  }
+
+  /**
+   * 提取并翻译术语和人名
+   * @param batches 文本批次
+   * @param sourceLanguage 源语言
+   * @param targetLanguage 目标语言
+   * @param model 使用的模型
+   * @param preserveFormatting 是否保留格式
+   */
+  private async extractAndTranslateTerms(
+    batches: string[][],
+    sourceLanguage: string | undefined,
+    targetLanguage: string,
+    model: string,
+    preserveFormatting: boolean
+  ): Promise<void> {
+    // 清空现有术语表
+    this.terminology = [];
+
+    // 合并所有批次文本用于术语提取
+    const allTexts = batches.flat().join("\n");
+
+    // 创建术语提取的系统提示
+    const extractSystemPrompt = `You are a professional terminology extractor. 
+Your task is to identify important terms, names, and recurring phrases from the provided text.
+${sourceLanguage ? `The text is in ${sourceLanguage}.` : ""}
+Extract only terms that should be consistently translated.
+Respond with a JSON object containing an array of terms.
+Example response format: { "terms": ["term1", "term2", "name1", "phrase1", ...] }`;
+
+    try {
+      // 提取术语
+      const extractedTerms = await this.extractTerms(
+        allTexts,
+        extractSystemPrompt,
+        model
+      );
+
+      if (extractedTerms.length === 0) {
+        return; // 没有提取到术语，直接返回
+      }
+
+      // 创建术语翻译的系统提示
+      const translateTermsSystemPrompt = `You are a professional terminology translator.
+${
+  sourceLanguage
+    ? `Translate from ${sourceLanguage} to ${targetLanguage}.`
+    : `Translate to ${targetLanguage}.`
+}
+Your task is to translate each term accurately while maintaining the original meaning.
+Respond with a JSON object containing an array of translations in the same order as the input.
+Example response format: { "translations": ["translated term 1", "translated term 2", ...] }`;
+
+      // 翻译提取的术语
+      const translatedTerms = await this.translateBatch(
+        extractedTerms,
+        translateTermsSystemPrompt,
+        model
+      );
+
+      // 构建术语表
+      for (let i = 0; i < extractedTerms.length; i++) {
+        this.terminology.push({
+          original: extractedTerms[i],
+          translated: translatedTerms[i],
+        });
+      }
+    } catch (error) {
+      console.error(
+        `Error extracting or translating terms: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      // 出错时清空术语表，继续正常翻译流程
+      this.terminology = [];
+    }
+  }
+
+  /**
+   * 提取术语和人名
+   * @param text 文本内容
+   * @param systemPrompt 系统提示
+   * @param model 使用的模型
+   * @returns 提取的术语数组
+   */
+  private async extractTerms(
+    text: string,
+    systemPrompt: string,
+    model: string
+  ): Promise<string[]> {
+    try {
+      // 创建请求选项
+      const requestOptions: any = {
+        model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content: `Extract important terms, names, and recurring phrases from the following text:\n${text}`,
+          },
+        ],
+        temperature: 0.3,
+      };
+
+      // 只有OpenAI模型才添加response_format选项
+      if (model.startsWith("gpt-")) {
+        requestOptions.response_format = { type: "json_object" };
+      }
+
+      const response = await this.openai.chat.completions.create(
+        requestOptions
+      );
+
+      const content = response.choices[0]?.message.content;
+
+      if (!content) {
+        throw new Error("No content in term extraction response");
+      }
+
+      // 清理内容，移除可能的 Markdown 代码块标记
+      let cleanedContent = content.trim();
+
+      // 移除开头的 ```json 或其他代码块标记
+      if (cleanedContent.startsWith("```")) {
+        const firstLineEnd = cleanedContent.indexOf("\n");
+        if (firstLineEnd !== -1) {
+          cleanedContent = cleanedContent.substring(firstLineEnd + 1);
+        }
+      }
+
+      // 移除结尾的 ``` 标记
+      if (cleanedContent.endsWith("```")) {
+        cleanedContent = cleanedContent
+          .substring(0, cleanedContent.lastIndexOf("```"))
+          .trim();
+      }
+
+      // 解析JSON响应
+      let parsedContent;
+      try {
+        parsedContent = JSON.parse(cleanedContent);
+      } catch (error) {
+        console.error("Failed to parse JSON response:", cleanedContent);
+        return []; // 解析失败时返回空数组
+      }
+
+      if (!parsedContent.terms || !Array.isArray(parsedContent.terms)) {
+        return []; // 响应格式不正确时返回空数组
+      }
+
+      return parsedContent.terms;
+    } catch (error) {
+      console.error(
+        `Term extraction error: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return []; // 出错时返回空数组
+    }
   }
 
   /**
@@ -303,12 +478,8 @@ export class TranslationService {
           },
         ],
         temperature: 0.3,
+        response_format: { type: "json_object" },
       };
-
-      // 只有OpenAI模型才添加response_format选项
-      if (model.startsWith("gpt-")) {
-        requestOptions.response_format = { type: "json_object" };
-      }
 
       const response = await this.openai.chat.completions.create(
         requestOptions
@@ -386,15 +557,17 @@ export class TranslationService {
 
   /**
    * Create a system prompt for the AI
-   * @param sourceLanguage Source language
    * @param targetLanguage Target language
    * @param preserveFormatting Whether to preserve formatting
+   * @param sourceLanguage Source language
+   * @param terminology 术语表
    * @returns System prompt string
    */
   private createSystemPrompt(
     targetLanguage: string,
     preserveFormatting: boolean,
-    sourceLanguage?: string
+    sourceLanguage?: string,
+    terminology?: TerminologyEntry[]
   ): string {
     let prompt = `You are a professional subtitle translator. `;
 
@@ -413,6 +586,20 @@ Your task is to translate each subtitle text accurately while maintaining the or
 Respond with a JSON object containing a "translations" array with the translated texts in the same order as the input.
 Example response format: { "translations": ["translated text 1", "translated text 2", ...] }
 `;
+
+    // 如果有术语表，添加到提示中
+    if (terminology && terminology.length > 0) {
+      prompt += `\nPlease use the following terminology consistently in your translations:\n`;
+
+      // 将术语表格式化为表格形式
+      prompt += `Original | Translation\n`;
+      prompt += `-------- | -----------\n`;
+
+      // 添加术语表条目
+      for (const entry of terminology) {
+        prompt += `${entry.original} | ${entry.translated}\n`;
+      }
+    }
 
     return prompt;
   }
@@ -450,5 +637,28 @@ Example response format: { "translations": ["translated text 1", "translated tex
    */
   public getLastBatchesCount(): number {
     return this.lastBatchesCount;
+  }
+
+  /**
+   * 获取当前术语表
+   * @returns 术语表
+   */
+  public getTerminology(): TerminologyEntry[] {
+    return [...this.terminology];
+  }
+
+  /**
+   * 设置术语表
+   * @param terminology 术语表
+   */
+  public setTerminology(terminology: TerminologyEntry[]): void {
+    this.terminology = [...terminology];
+  }
+
+  /**
+   * 清空术语表
+   */
+  public clearTerminology(): void {
+    this.terminology = [];
   }
 }

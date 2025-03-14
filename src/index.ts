@@ -95,6 +95,8 @@ class SrtTranslator {
         concurrentRequests,
         enableCache,
         cacheDir,
+        extractTerms,
+        useTerminology,
       } = options;
 
       // Initialize translationService (先初始化服务，再输出信息)
@@ -144,36 +146,47 @@ class SrtTranslator {
       const textsToTranslate =
         this.srtService.extractTextForTranslation(subtitles);
 
-      // Use initialized translationService
-      const translationService = this.translationService;
-
       // 在创建进度条前输出翻译信息
       console.log("Starting translation...");
       console.log(
-        `Using translation model: ${model || translationService.getModel()}`
+        `Using translation model: ${
+          model || this.translationService.getModel()
+        }`
       );
       console.log(`Concurrent requests: ${concurrentRequests}`);
 
       // 创建翻译进度条
       this.createProgressBar(textsToTranslate.length, "Translation progress");
 
-      // 创建一个包装的翻译服务，用于更新进度条
-      const translatedTexts = await this.translateWithProgress(
-        translationService,
+      // 直接使用翻译服务进行翻译
+      const translationOptions: TranslationOptions = {
+        sourceLanguage,
+        targetLanguage,
+        model,
+        preserveFormatting,
+        apiKey,
+        baseUrl,
+        maxBatchLength,
+        concurrentRequests,
+        extractTerms,
+        useTerminology,
+      };
+
+      const translatedTexts = await this.translationService.translateTexts(
         textsToTranslate,
-        {
-          sourceLanguage,
-          targetLanguage,
-          model,
-          preserveFormatting,
-          apiKey,
-          baseUrl,
-          maxBatchLength,
-          concurrentRequests,
-        }
+        translationOptions
       );
 
       this.stopProgressBar();
+
+      // 显示缓存命中信息
+      const cacheInfo = this.translationService.getCacheHitInfo();
+      if (cacheInfo.total > 0) {
+        console.log(`Cache hits: ${cacheInfo.hits}/${cacheInfo.total}`);
+        console.log(
+          `Created ${this.translationService.getLastBatchesCount()} batches for translation`
+        );
+      }
 
       // 创建写入进度条
       this.createProgressBar(1, "Writing results");
@@ -193,8 +206,34 @@ class SrtTranslator {
       // 先停止进度条，再输出保存信息
       this.stopProgressBar();
 
+      // 如果启用了术语提取，显示术语表信息
+      if (extractTerms) {
+        const terminology = this.translationService.getTerminology();
+        if (terminology.length > 0) {
+          console.log(
+            `\nExtracted and translated ${terminology.length} terms for consistent translation:`
+          );
+          console.log("Original | Translation");
+          console.log("-------- | -----------");
+          // 只显示前10个术语，避免输出过多
+          const displayCount = Math.min(terminology.length, 10);
+          for (let i = 0; i < displayCount; i++) {
+            console.log(
+              `${terminology[i].original} | ${terminology[i].translated}`
+            );
+          }
+          if (terminology.length > 10) {
+            console.log(`... and ${terminology.length - 10} more terms`);
+          }
+        } else {
+          console.log(
+            "\nNo significant terms were extracted for this content."
+          );
+        }
+      }
+
       // 输出保存信息
-      console.log(`Translated subtitles saved to: ${savedPath}`);
+      console.log(`\nTranslated subtitles saved to: ${savedPath}`);
       console.log("\nTranslation completed successfully!");
     } catch (error) {
       // 确保进度条被停止
@@ -208,78 +247,13 @@ class SrtTranslator {
   }
 
   /**
-   * 带进度条的翻译方法
-   * @param translationService 翻译服务
-   * @param texts 要翻译的文本数组
-   * @param options 翻译选项
-   * @returns 翻译后的文本数组
-   */
-  private async translateWithProgress(
-    translationService: TranslationService,
-    texts: string[],
-    options: TranslationOptions
-  ): Promise<string[]> {
-    // 创建一个计数器来跟踪已完成的翻译
-    let completedCount = 0;
-
-    // 创建一个代理方法来拦截翻译批次的完成
-    const originalTranslateTexts =
-      translationService.translateTexts.bind(translationService);
-
-    // 重写翻译方法以添加进度更新
-    translationService.translateTexts = async (
-      textsToTranslate: string[],
-      translationOptions: TranslationOptions
-    ): Promise<string[]> => {
-      // 在调用原始方法前暂停进度条，避免输出混乱
-      if (this.progressBar) {
-        this.progressBar.stop();
-      }
-
-      // 调用原始方法
-      const result = await originalTranslateTexts(
-        textsToTranslate,
-        translationOptions
-      );
-
-      // 更新进度
-      completedCount += textsToTranslate.length;
-
-      // 重新启动进度条并更新进度
-      if (this.progressBar) {
-        this.progressBar.start(texts.length, completedCount);
-      }
-
-      return result;
-    };
-
-    // 执行翻译
-    const results = await translationService.translateTexts(texts, options);
-
-    // 翻译完成后，显示缓存命中信息
-    const cacheInfo = translationService.getCacheHitInfo();
-    if (cacheInfo.total > 0) {
-      this.stopProgressBar();
-      console.log(`Cache hits: ${cacheInfo.hits}/${cacheInfo.total}`);
-      console.log(
-        `Created ${translationService.getLastBatchesCount()} batches for translation`
-      );
-      // 不再重新创建进度条，让主流程处理进度条的创建和停止
-    }
-
-    return results;
-  }
-
-  /**
    * Process multiple files in batch
    * @param patterns Glob patterns for input files
    * @param options CLI options
-   * @param parallel Whether to process files in parallel
    */
   public async batchProcess(
     patterns: string[],
-    options: Omit<CliOptions, "input" | "output">,
-    parallel: boolean = false
+    options: Omit<CliOptions, "input" | "output">
   ): Promise<void> {
     try {
       // Find all matching files
@@ -303,61 +277,64 @@ class SrtTranslator {
       this.createProgressBar(inputFiles.length, "Batch processing progress");
       let processedCount = 0;
 
-      if (parallel) {
-        // Process files in parallel
-        console.log("Processing files in parallel...");
-        await Promise.all(
-          inputFiles.map((input) =>
-            this.run({
-              ...options,
-              input,
-              output: FileUtils.generateOutputPath(
-                input,
-                options.targetLanguage
-              ),
+      // Process files in parallel
+      console.log("Processing files in parallel...");
+      await Promise.all(
+        inputFiles.map((input) =>
+          this.run({
+            ...options,
+            input,
+            output: FileUtils.generateOutputPath(input, options.targetLanguage),
+          })
+            .then(() => {
+              processedCount++;
+              this.updateProgressBar(processedCount);
             })
-              .then(() => {
-                processedCount++;
-                this.updateProgressBar(processedCount);
-              })
-              .catch((error: unknown) => {
-                console.error(
-                  `Error processing ${input}: ${
-                    error instanceof Error ? error.message : String(error)
-                  }`
-                );
-                processedCount++;
-                this.updateProgressBar(processedCount);
-              })
-          )
-        );
-      } else {
-        // Process files sequentially
-        console.log("Processing files sequentially...");
-        for (const input of inputFiles) {
-          try {
-            await this.run({
-              ...options,
-              input,
-              output: FileUtils.generateOutputPath(
-                input,
-                options.targetLanguage
-              ),
-            });
-          } catch (error: unknown) {
-            console.error(
-              `Error processing ${input}: ${
-                error instanceof Error ? error.message : String(error)
-              }`
-            );
-          }
-          processedCount++;
-          this.updateProgressBar(processedCount);
-        }
-      }
+            .catch((error: unknown) => {
+              console.error(
+                `Error processing ${input}: ${
+                  error instanceof Error ? error.message : String(error)
+                }`
+              );
+              processedCount++;
+              this.updateProgressBar(processedCount);
+            })
+        )
+      );
 
       this.stopProgressBar();
       console.log("Batch processing completed!");
+
+      // 输出批处理完成信息
+      console.log(
+        `\nBatch processing completed: ${processedCount} files translated successfully.`
+      );
+
+      // 如果启用了术语提取，显示术语表信息
+      if (options.extractTerms) {
+        const terminology = this.translationService.getTerminology();
+        if (terminology.length > 0) {
+          console.log(
+            `\nExtracted and translated ${terminology.length} terms for consistent translation:`
+          );
+          console.log("Original | Translation");
+          console.log("-------- | -----------");
+          // 只显示前10个术语，避免输出过多
+          const displayCount = Math.min(terminology.length, 10);
+          for (let i = 0; i < displayCount; i++) {
+            console.log(
+              `${terminology[i].original} | ${terminology[i].translated}`
+            );
+          }
+          if (terminology.length > 10) {
+            console.log(`... and ${terminology.length - 10} more terms`);
+          }
+        } else {
+          console.log(
+            "\nNo significant terms were extracted for this content."
+          );
+        }
+      }
     } catch (error) {
       // 确保进度条被停止
       this.stopProgressBar();
@@ -411,6 +388,14 @@ function setupCli(): Command {
     )
     .option("--no-cache", "Disable translation caching")
     .option("--cache-dir <path>", "Directory to store translation cache")
+    .option(
+      "--extract-terms",
+      "Extract and translate terms and names for consistent translation"
+    )
+    .option(
+      "--use-terminology",
+      "Use terminology table (only effective when extract-terms is enabled)"
+    )
     .option("-v, --verbose", "Enable verbose logging")
     .action(async (input, rawOptions) => {
       const translator = new SrtTranslator(rawOptions.verbose);
@@ -451,16 +436,19 @@ function setupCli(): Command {
     )
     .option("--no-cache", "Disable translation caching")
     .option("--cache-dir <path>", "Directory to store translation cache")
-    .option("--parallel", "Process files in parallel")
+    .option(
+      "--extract-terms",
+      "Extract and translate terms and names for consistent translation"
+    )
+    .option(
+      "--use-terminology",
+      "Use terminology table (only effective when extract-terms is enabled)"
+    )
     .option("-v, --verbose", "Enable verbose logging")
     .action(async (patterns, rawOptions) => {
       const translator = new SrtTranslator(rawOptions.verbose);
       const processedOptions = processOptions(rawOptions);
-      await translator.batchProcess(
-        patterns,
-        processedOptions,
-        rawOptions.parallel
-      );
+      await translator.batchProcess(patterns, processedOptions);
     });
 
   // Add examples to help text
@@ -472,9 +460,10 @@ Examples:
   $ srt-translator translate movie.srt -t Chinese -c 3     # Translate with 3 concurrent requests
   $ srt-translator translate movie.srt -t Chinese --no-cache # Translate without using cache
   $ srt-translator translate movie.srt -t Chinese --cache-dir ./my-cache # Use custom cache directory
+  $ srt-translator translate movie.srt -t Chinese --extract-terms # Extract and translate terms for consistency
   $ srt-translator batch "**/*.srt" -t French              # Translate all SRT files to French
-  $ srt-translator batch "movies/*.srt" -t German --parallel # Translate all SRTs in parallel
   $ srt-translator batch "movies/*.srt" -t German -c 5     # Translate with 5 concurrent requests
+  $ srt-translator batch "movies/*.srt" -t German --extract-terms # Extract terms for consistent translation
 `
   );
 
