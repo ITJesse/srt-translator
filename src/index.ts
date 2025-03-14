@@ -52,13 +52,11 @@ class SrtTranslator {
         baseUrl,
         maxBatchLength,
         concurrentRequests,
-        enableCache,
-        cacheDir,
         terminology,
       } = options
 
       // Initialize translationService (先初始化服务，再输出信息)
-      this.translationService = new TranslationService(apiKey, baseUrl, model, enableCache, cacheDir)
+      this.translationService = new TranslationService(apiKey, baseUrl, model)
 
       // Validate input file
       if (!(await FileUtils.fileExists(input))) {
@@ -79,10 +77,6 @@ class SrtTranslator {
       console.log(`Translating file: ${input}`)
       console.log(`Target language: ${targetLanguage}`)
       console.log(`Output file: ${outputPath}`)
-      console.log(`Cache: ${enableCache ? 'enabled (disk)' : 'disabled'}`)
-      if (enableCache) {
-        console.log(`Cache directory: ${cacheDir}`)
-      }
       if (terminology) {
         console.log(`Terminology extraction: enabled (将先提取术语，再进行翻译)`)
       }
@@ -117,13 +111,6 @@ class SrtTranslator {
       console.log(`Translating ${textsToTranslate.length} subtitle entries...`)
       const translatedTexts = await this.translationService.translateTexts(textsToTranslate, translationOptions)
       console.log('Translation completed')
-
-      // 显示缓存命中信息
-      const cacheInfo = this.translationService.getCacheHitInfo()
-      if (cacheInfo.total > 0) {
-        console.log(`Cache hits: ${cacheInfo.hits}/${cacheInfo.total}`)
-        console.log(`Created ${this.translationService.getLastBatchesCount()} batches for translation`)
-      }
 
       console.log('Writing translated subtitles...')
       // Create translated subtitles
@@ -182,8 +169,6 @@ function setupCli(): Command {
     .option('-b, --base-url <url>', 'OpenAI API base URL (overrides OPENAI_API_BASE_URL environment variable)')
     .option('-l, --max-batch-length <length>', 'Maximum character length per batch')
     .option('-c, --concurrent-requests <number>', 'Number of concurrent translation requests')
-    .option('--no-cache', 'Disable translation caching')
-    .option('--cache-dir <path>', 'Directory to store translation cache')
     .option('--terminology', 'Enable terminology extraction and usage for consistent translation')
     .option('-v, --verbose', 'Enable verbose logging')
     .action(async (input, rawOptions) => {
@@ -203,8 +188,6 @@ function setupCli(): Command {
 Examples:
   $ srt-translator translate movie.srt -t Chinese          # Translate movie.srt to Chinese
   $ srt-translator translate movie.srt -t Chinese -c 3     # Translate with 3 concurrent requests
-  $ srt-translator translate movie.srt -t Chinese --no-cache # Translate without using cache
-  $ srt-translator translate movie.srt -t Chinese --cache-dir ./my-cache # Use custom cache directory
   $ srt-translator translate movie.srt -t Chinese --terminology # Use terminology for consistency
 `,
   )

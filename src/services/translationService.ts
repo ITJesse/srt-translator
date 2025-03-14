@@ -2,7 +2,6 @@ import { EventEmitter } from 'events'
 import OpenAI from 'openai'
 
 import { TerminologyEntry, TranslationOptions } from '../types'
-import { CacheService } from './cacheService'
 
 /**
  * Service for handling translations using OpenAI API
@@ -14,7 +13,6 @@ import { CacheService } from './cacheService'
  *   completedPercent: number - 完成百分比 (0-100)
  *   translatedTexts: number - 已翻译文本数量估计
  *   totalTexts: number - 总文本数量
- *   cacheHits: number - 缓存命中数
  * }
  *
  * 示例:
@@ -27,8 +25,6 @@ import { CacheService } from './cacheService'
 export class TranslationService extends EventEmitter {
   private openai: OpenAI
   private model: string
-  private cacheService: CacheService
-  private lastCacheHits: number = 0
   private lastTotalTexts: number = 0
   private lastBatchesCount: number = 0
   private terminology: TerminologyEntry[] = [] // 术语表
@@ -41,10 +37,8 @@ export class TranslationService extends EventEmitter {
    * @param apiKey OpenAI API key
    * @param baseUrl OpenAI API base URL
    * @param model OpenAI model to use
-   * @param enableCache Whether to enable caching (default: true)
-   * @param cacheDir Cache directory (default: ~/.srt-translator/cache)
    */
-  constructor(apiKey: string, baseUrl: string, model: string, enableCache: boolean = true, cacheDir?: string) {
+  constructor(apiKey: string, baseUrl: string, model: string) {
     super() // 初始化EventEmitter
 
     if (!apiKey) {
@@ -61,7 +55,6 @@ export class TranslationService extends EventEmitter {
     })
 
     this.model = model
-    this.cacheService = new CacheService(enableCache, cacheDir)
   }
 
   /**
@@ -71,25 +64,11 @@ export class TranslationService extends EventEmitter {
    * @returns Array of translated text strings
    */
   public async translateTexts(texts: string[], options: TranslationOptions): Promise<string[]> {
-    const {
-      sourceLanguage,
-      targetLanguage,
-      model,
-      apiKey,
-      baseUrl,
-      maxBatchLength,
-      concurrentRequests,
-      enableCache,
-      terminology,
-    } = options
+    const { sourceLanguage, targetLanguage, model, apiKey, baseUrl, maxBatchLength, concurrentRequests, terminology } =
+      options
 
     // 使用传入的模型
     const modelToUse = model || this.model
-
-    // 设置缓存状态（只控制启用/禁用，不重新设置目录）
-    if (enableCache !== undefined) {
-      this.cacheService.setEnabled(enableCache)
-    }
 
     // Reinitialize OpenAI client if custom API key or baseUrl is provided
     if (apiKey || baseUrl) {
@@ -105,7 +84,6 @@ export class TranslationService extends EventEmitter {
     // 存储批次信息
     this.lastBatchesCount = batches.length
     this.lastTotalTexts = texts.length
-    this.lastCacheHits = 0 // 将在处理API缓存时更新
 
     // 重置进度跟踪
     this.completedBatches = 0
@@ -135,8 +113,6 @@ export class TranslationService extends EventEmitter {
     )
 
     // 第三步：翻译所有批次
-    let cacheHits = 0
-
     // 使用并行处理批次
     const parallelRequests = concurrentRequests || 1
 
@@ -158,39 +134,6 @@ export class TranslationService extends EventEmitter {
       const groupPromises = currentBatchGroup.map(async (batch, groupIndex) => {
         const batchIndex = i + groupIndex
 
-        // 创建请求选项用于缓存检查
-        const requestOptions: any = {
-          model: modelToUse,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            {
-              role: 'user',
-              content: `Translate the following subtitle texts (provided as JSON array):\n${JSON.stringify(batch)}`,
-            },
-          ],
-          temperature: 0.3,
-          response_format: { type: 'json_object' },
-        }
-
-        // 检查API请求缓存
-        const cachedResponse = this.cacheService.getApiResponse(requestOptions)
-        if (cachedResponse) {
-          // 如果有缓存的API响应，直接使用
-          cacheHits++
-          const content = cachedResponse.choices[0]?.message.content
-          if (content) {
-            try {
-              const translations = this.processResponseContent(content, batch)
-              this.updateProgress() // 更新进度
-              return { index: batchIndex, translations }
-            } catch (error) {
-              console.error(`Error processing cached response: ${error}`)
-              // 如果处理缓存失败，继续正常翻译流程
-            }
-          }
-        }
-
-        // 如果没有缓存或缓存处理失败，翻译批次
         try {
           const translations = await this.translateBatch(batch, systemPrompt, modelToUse)
           this.updateProgress() // 更新进度
@@ -219,9 +162,6 @@ export class TranslationService extends EventEmitter {
     results.sort((a, b) => a.index - b.index)
     const allTranslations = results.flatMap((result) => result.translations)
 
-    // 更新缓存命中信息
-    this.lastCacheHits = cacheHits
-
     return allTranslations
   }
 
@@ -247,66 +187,13 @@ export class TranslationService extends EventEmitter {
     // 创建术语提取和翻译的系统提示
     const extractAndTranslatePrompt = `You are a professional terminology extractor and translator specialized in subtitle content. 
 Your task is to identify important terms, names, and recurring phrases from the provided subtitle text, and translate them.
-${
-  sourceLanguage
-    ? `The text is in ${sourceLanguage}. Translate the terms to ${targetLanguage}.`
-    : `Translate the terms to ${targetLanguage}.`
-}
-Focus on extracting:
-1. Character names and proper nouns
-2. Technical terms and specialized vocabulary
-3. Recurring phrases that need consistent translation
-4. Cultural references that require careful translation
+${sourceLanguage ? `The source language is ${sourceLanguage}.` : 'Please detect the source language.'}
+The target language is ${targetLanguage}.
 
-Extract only terms that appear multiple times and should be consistently translated.
-For each term, provide a high-quality, contextually appropriate translation.
-
-IMPORTANT: Your response MUST follow this exact JSON format:
-{
-  "terminology": [
-    {"original": "term1", "translated": "translated term 1"},
-    {"original": "term2", "translated": "translated term 2"}
-  ]
-}
-
-Here are examples of good terminology extraction and translation:
-
-Example 1 - Movie subtitles with character names:
-Input text contains multiple instances of "Tony Stark", "Iron Man", "Avengers"
-Good output:
-{
-  "terminology": [
-    {"original": "Tony Stark", "translated": "托尼·斯塔克"},
-    {"original": "Iron Man", "translated": "钢铁侠"},
-    {"original": "Avengers", "translated": "复仇者"}
-  ]
-}
-
-Example 2 - Technical documentation:
-Input text contains multiple instances of "machine learning", "neural network", "data processing"
-Good output:
-{
-  "terminology": [
-    {"original": "machine learning", "translated": "机器学习"},
-    {"original": "neural network", "translated": "神经网络"},
-    {"original": "data processing", "translated": "数据处理"}
-  ]
-}
-
-Example 3 - TV show with recurring phrases:
-Input text contains characters repeatedly saying "Winter is coming" and "You know nothing"
-Good output:
-{
-  "terminology": [
-    {"original": "Winter is coming", "translated": "凛冬将至"},
-    {"original": "You know nothing", "translated": "你什么都不知道"}
-  ]
-}
-
-CRITICAL REQUIREMENTS:
-1. Each "original" term MUST have exactly one corresponding "translated" term
-2. Do not combine multiple terms into one entry
-3. Do not split a single term into multiple entries
+Identify and translate terms such as:
+1. Character names and titles
+2. Locations and place names
+3. Technical terminology
 4. Each term should be meaningful and complete (not just partial words)
 5. Ensure all extracted terms actually appear in the source text
 6. Only extract terms that appear multiple times and need consistent translation
@@ -330,26 +217,9 @@ Do not include any text outside of this JSON structure. The response must be val
         response_format: { type: 'json_object' },
       }
 
-      // 检查API请求缓存
-      const cachedResponse = this.cacheService.getApiResponse(requestOptions)
-      if (cachedResponse) {
-        // 如果有缓存的API响应，直接使用
-        console.log('使用缓存的术语提取结果')
-        const content = cachedResponse.choices[0]?.message.content
-        if (content) {
-          this.processTerminologyResponse(content)
-          return
-        }
-      }
-
-      // 如果没有缓存或缓存处理失败，发送API请求
+      // 发送API请求提取术语
       console.log('发送API请求提取术语...')
       const response = await this.openai.chat.completions.create(requestOptions)
-
-      // 缓存API响应
-      if (this.cacheService.isEnabled()) {
-        this.cacheService.setApiResponse(requestOptions, response)
-      }
 
       const content = response.choices[0]?.message.content
       if (!content) {
@@ -494,77 +364,32 @@ Do not include any text outside of this JSON structure. The response must be val
    * @returns Array of translated text strings
    */
   private async translateBatch(batch: string[], systemPrompt: string, model: string): Promise<string[]> {
-    let retryCount = 0
-    const MAX_RETRIES = 3
+    try {
+      const response = await this.openai.chat.completions.create({
+        model: model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          {
+            role: 'user',
+            content: `Translate the following subtitle texts (provided as JSON array):\n${JSON.stringify(batch)}`,
+          },
+        ],
+        temperature: 0.3,
+        response_format: { type: 'json_object' },
+      })
 
-    while (retryCount <= MAX_RETRIES) {
-      try {
-        // Format the batch as a JSON array string
-        const batchJson = JSON.stringify(batch)
-
-        // 创建请求选项
-        const requestOptions: any = {
-          model,
-          messages: [
-            { role: 'system', content: systemPrompt },
-            {
-              role: 'user',
-              content: `Translate the following subtitle texts (provided as JSON array):\n${batchJson}\n\nCRITICAL: Your response MUST contain EXACTLY ${batch.length} translated texts. The "translations" array MUST have the SAME LENGTH as the input array (${batch.length} items).\n\nProvide the translated texts in a JSON object with a "translations" array in the same order. Example: { "translations": ["translated text 1", "translated text 2", ...] }\n\nGuidelines for high-quality subtitle translation:\n1. Maintain the original meaning, tone, and intent\n2. Preserve all formatting tags like <i>, <b>, \\n, etc.\n3. Keep translated text concise and suitable for on-screen reading\n4. Consider cultural context and nuances\n5. Translate idioms appropriately rather than literally when needed\n\nCOUNT CAREFULLY: Confirm that your "translations" array contains exactly ${batch.length} items before responding.`,
-            },
-          ],
-          temperature: 0.3,
-          response_format: { type: 'json_object' },
-        }
-
-        // 检查API请求缓存
-        const cachedResponse = this.cacheService.getApiResponse(requestOptions)
-        if (cachedResponse) {
-          // 如果有缓存的API响应，直接使用
-          const content = cachedResponse.choices[0]?.message.content
-          if (content) {
-            // 处理缓存的响应内容
-            return this.processResponseContent(content, batch)
-          }
-        }
-
-        // 如果没有缓存或缓存处理失败，发送API请求
-        const response = await this.openai.chat.completions.create(requestOptions)
-
-        // 缓存API响应
-        if (this.cacheService.isEnabled()) {
-          this.cacheService.setApiResponse(requestOptions, response)
-        }
-
-        const content = response.choices[0]?.message.content
-
-        if (!content) {
-          throw new Error('No content in translation response')
-        }
-
-        return this.processResponseContent(content, batch)
-      } catch (error) {
-        retryCount++
-
-        // 如果是由于翻译结果数量不匹配引起的错误，并且还有重试次数，则进行重试
-        if (error instanceof Error && error.message.includes('翻译结果数量不匹配') && retryCount <= MAX_RETRIES) {
-          console.error(`批次翻译结果数量不匹配，进行第 ${retryCount} 次重试 (最多 ${MAX_RETRIES} 次)...`)
-          // 继续下一次循环进行重试
-          continue
-        }
-
-        // 如果已经达到最大重试次数或者是其他错误，则抛出错误
-        console.error(`Translation error: ${error instanceof Error ? error.message : String(error)}`)
-
-        if (retryCount > MAX_RETRIES && error instanceof Error && error.message.includes('翻译结果数量不匹配')) {
-          throw new Error(`批次翻译失败：已重试 ${MAX_RETRIES} 次，但结果数量仍不匹配。${error.message}`)
-        }
-
-        throw error
+      const content = response.choices[0]?.message.content
+      if (!content) {
+        throw new Error('Empty response from OpenAI API')
       }
-    }
 
-    // 这里不应该被执行到，但为了TypeScript类型检查，返回空数组
-    return []
+      // 处理API响应
+      return this.processResponseContent(content, batch)
+    } catch (error) {
+      // 处理错误
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      throw new Error(`Translation error: ${errorMessage}`)
+    }
   }
 
   /**
@@ -889,15 +714,7 @@ Notice how "neural network" is consistently translated as "神经网络", "deep 
   }
 
   /**
-   * 获取缓存服务实例
-   * @returns 缓存服务实例
-   */
-  public getCacheService(): CacheService {
-    return this.cacheService
-  }
-
-  /**
-   * 获取当前使用的模型
+   * 获取模型名称
    * @returns 当前使用的模型名称
    */
   public getModel(): string {
@@ -905,18 +722,7 @@ Notice how "neural network" is consistently translated as "神经网络", "deep 
   }
 
   /**
-   * 获取最后一次翻译的缓存命中信息
-   * @returns 缓存命中信息 {hits: number, total: number}
-   */
-  public getCacheHitInfo(): { hits: number; total: number } {
-    return {
-      hits: this.lastCacheHits,
-      total: this.lastTotalTexts,
-    }
-  }
-
-  /**
-   * 获取最后一次翻译的批次数量
+   * 获取上次翻译的批次数量
    * @returns 批次数量
    */
   public getLastBatchesCount(): number {
@@ -924,19 +730,19 @@ Notice how "neural network" is consistently translated as "神经网络", "deep 
   }
 
   /**
-   * 获取当前术语表
-   * @returns 术语表
+   * 获取术语表
+   * @returns 术语表数组
    */
   public getTerminology(): TerminologyEntry[] {
-    return [...this.terminology]
+    return this.terminology
   }
 
   /**
    * 设置术语表
-   * @param terminology 术语表
+   * @param terminology 术语表数组
    */
   public setTerminology(terminology: TerminologyEntry[]): void {
-    this.terminology = [...terminology]
+    this.terminology = terminology
   }
 
   /**
@@ -964,7 +770,6 @@ Notice how "neural network" is consistently translated as "神经网络", "deep 
     completedPercent: number
     translatedTexts: number
     totalTexts: number
-    cacheHits: number
   } {
     const completedPercent = this.totalBatches ? Math.floor((this.completedBatches / this.totalBatches) * 100) : 0
     const translatedTexts = this.lastTotalTexts
@@ -977,7 +782,6 @@ Notice how "neural network" is consistently translated as "神经网络", "deep 
       completedPercent,
       translatedTexts,
       totalTexts: this.lastTotalTexts,
-      cacheHits: this.lastCacheHits,
     }
   }
 
@@ -1067,7 +871,7 @@ Notice how "neural network" is consistently translated as "神经网络", "deep 
 
     // 在同一行更新进度信息
     process.stdout.write(
-      `\r翻译进度: [${bar}] ${percent}% | ${completed}/${total} 批次 | ${translatedTexts}/${this.lastTotalTexts} 字幕 | 缓存命中: ${this.lastCacheHits}`,
+      `\r翻译进度: [${bar}] ${percent}% | ${completed}/${total} 批次 | ${translatedTexts}/${this.lastTotalTexts} 字幕`,
     )
   }
 }
