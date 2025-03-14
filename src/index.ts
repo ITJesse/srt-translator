@@ -6,9 +6,7 @@ import fs from 'fs'
 import path from 'path'
 
 import { dumpSrt, Srt, SubtitleItem } from './lib/srt'
-import {
-    extractGlossary, ExtractGlossaryConfig, translateText, TranslateTextConfig
-} from './lib/translate'
+import { Translator } from './lib/translate'
 
 /**
  * 翻译配置接口
@@ -25,7 +23,6 @@ export interface TranslationConfig {
   apiBaseUrl?: string
 }
 
-// 设置默认值
 const DEFAULT_MAX_LENGTH = 2000
 const DEFAULT_CONCURRENCY = 10
 const DEFAULT_MODEL = 'gpt-4o'
@@ -41,7 +38,7 @@ const getVersion = (): string => {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'))
     return packageJson.version
   } catch (error) {
-    return '未知版本'
+    return 'Unknown version'
   }
 }
 
@@ -54,9 +51,8 @@ const processSubtitles = async (config: TranslationConfig): Promise<void> => {
     config
 
   try {
-    // 检查输入文件是否存在
     if (!fs.existsSync(inputFile)) {
-      console.error(`错误: 输入文件 "${inputFile}" 不存在`)
+      console.error(`Error: Input file "${inputFile}" does not exist`)
       process.exit(1)
     }
 
@@ -68,7 +64,7 @@ const processSubtitles = async (config: TranslationConfig): Promise<void> => {
     let currentBatchLength = 0
     let currentBatch: SubtitleItem[] = []
 
-    console.log(`总共有 ${subtitles.length} 个字幕需要处理`)
+    console.log(`Total ${subtitles.length} subtitles to process`)
     for (const subtitle of subtitles) {
       if (currentBatchLength + subtitle.text.join('\n').length > maxLength) {
         batches.push(currentBatch)
@@ -80,63 +76,55 @@ const processSubtitles = async (config: TranslationConfig): Promise<void> => {
       currentBatchLength += subtitle.text.join('\n').length
     }
 
-    // 添加最后一个batch（如果有内容）
     if (currentBatch.length > 0) {
       batches.push(currentBatch)
     }
-    console.log(`总共有 ${batches.length} 个批次需要处理`)
+    console.log(`Total ${batches.length} batches to process`)
 
-    // 提取术语表
-    console.log('正在提取术语表...')
+    console.log('Extracting glossary...')
 
     let progress = new cliProgress.SingleBar({
-      format: '提取术语表: {bar} | {percentage}% | {value}/{total} | ETA: {eta}s',
+      format: 'Extracting glossary: {bar} | {percentage}% | {value}/{total} | ETA: {eta}s',
     })
     progress.start(batches.length, 0)
+
+    // 创建翻译器实例
+    const translator = new Translator(model, apiKey, apiBaseUrl)
 
     let glossary: Record<string, string> = {}
     for (let i = 0; i < batches.length; i += concurrency) {
       const batchPromises = batches.slice(i, i + concurrency).map(async (batch) => {
-        const glossaryConfig: ExtractGlossaryConfig = {
-          model,
+        const result = await translator.extractGlossary({
+          subtitles: batch,
           sourceLanguage,
           targetLanguage,
-          subtitles: batch,
-          apiKey,
-          baseUrl: apiBaseUrl,
-        }
-        const result = await extractGlossary(glossaryConfig)
+        })
         glossary = { ...glossary, ...result }
         progress.increment()
       })
       await Promise.all(batchPromises)
     }
     progress.stop()
-    console.log('术语表提取完成')
+    console.log('Glossary extraction completed')
 
-    // 并行处理批次
     progress = new cliProgress.SingleBar({
-      format: '翻译: {bar} | {percentage}% | {value}/{total} | ETA: {eta}s',
+      format: 'Translation: {bar} | {percentage}% | {value}/{total} | ETA: {eta}s',
     })
     progress.start(batches.length, 0)
     let results: Record<string, string> = {}
     for (let i = 0; i < batches.length; i += concurrency) {
       const batchPromises = batches.slice(i, i + concurrency).map(async (batch, index) => {
         try {
-          const translateConfig: TranslateTextConfig = {
-            model,
-            sourceLanguage,
-            targetLanguage,
+          const batchResult = await translator.translateText({
             subtitles: batch,
             glossary,
-            apiKey,
-            baseUrl: apiBaseUrl,
-          }
-          const batchResult = await translateText(translateConfig)
+            sourceLanguage,
+            targetLanguage,
+          })
           progress.increment()
           results = { ...results, ...batchResult }
         } catch (error) {
-          console.error(`批次 ${i + index + 1} 处理失败:`, error)
+          console.error(`Batch ${i + index + 1} processing failed:`, error)
           return {}
         }
       })
@@ -151,44 +139,67 @@ const processSubtitles = async (config: TranslationConfig): Promise<void> => {
       })),
     )
     fs.writeFileSync(outputFile, translatedSrtContent)
-    console.log(`翻译完成，已保存到 ${outputFile}`)
+    console.log(`Translation completed, saved to ${outputFile}`)
   } catch (error) {
-    console.error('处理过程中发生错误:', error)
+    console.error('Error occurred during processing:', error)
     process.exit(1)
   }
 }
 
-// 创建命令行程序
 const program = new Command()
 
-program.name('srt-translator').description('使用AI翻译SRT字幕文件的命令行工具').version(getVersion())
+program.name('srt-translator').description('CLI tool for translating SRT subtitle files using AI').version(getVersion())
 
 program
-  .argument('<inputFile>', '输入的SRT文件路径')
-  .option('-o, --output <file>', '输出的SRT文件路径（默认为输入文件名加前缀）')
-  .option('-s, --source <language>', `源语言 (默认: "${DEFAULT_SOURCE_LANGUAGE}")`)
-  .option('-t, --target <language>', `目标语言 (默认: "${DEFAULT_TARGET_LANGUAGE}")`)
-  .option('-m, --model <name>', `AI模型名称 (默认: "${DEFAULT_MODEL}")`)
-  .option('-l, --max-length <number>', `每批次的最大字符数 (默认: ${DEFAULT_MAX_LENGTH})`, `${DEFAULT_MAX_LENGTH}`)
-  .option('-c, --concurrency <number>', `并发处理的批次数 (默认: ${DEFAULT_CONCURRENCY})`, `${DEFAULT_CONCURRENCY}`)
-  .option('-k, --api-key <key>', 'OpenAI API密钥（必需）')
-  .option('-b, --api-base-url <url>', 'OpenAI API基础URL（可选）')
-  .option('--no-progress', '禁用进度条显示')
+  .argument('<inputFile>', 'Path to the input SRT file')
+  .option('-o, --output <file>', 'Path to the output SRT file (defaults to input filename with prefix)')
+  .option('-s, --source <language>', `Source language (default: "${DEFAULT_SOURCE_LANGUAGE}")`)
+  .option('-t, --target <language>', `Target language (default: "${DEFAULT_TARGET_LANGUAGE}")`)
+  .option('-m, --model <name>', `AI model name (default: "${DEFAULT_MODEL}")`)
+  .option(
+    '-l, --max-length <number>',
+    `Maximum characters per batch (default: ${DEFAULT_MAX_LENGTH})`,
+    `${DEFAULT_MAX_LENGTH}`,
+  )
+  .option(
+    '-c, --concurrency <number>',
+    `Number of concurrent batch processes (default: ${DEFAULT_CONCURRENCY})`,
+    `${DEFAULT_CONCURRENCY}`,
+  )
+  .option('-k, --api-key <key>', 'OpenAI API key (can also be set via OPENAI_API_KEY environment variable)')
+  .option(
+    '-b, --api-base-url <url>',
+    'OpenAI API base URL (can also be set via OPENAI_API_BASE_URL environment variable)',
+  )
+  .option('--no-progress', 'Disable progress bar display')
   .action(async (inputFile, options) => {
     const sourceLanguage = options.source || DEFAULT_SOURCE_LANGUAGE
     const targetLanguage = options.target || DEFAULT_TARGET_LANGUAGE
     const model = options.model || DEFAULT_MODEL
     const maxLength = parseInt(options.maxLength, 10)
     const concurrency = parseInt(options.concurrency, 10)
-    const apiKey = options.apiKey
+    let apiKey = options.apiKey
     const apiBaseUrl = options.apiBaseUrl
 
     if (!apiKey) {
-      console.error('错误: 必须提供OpenAI API密钥。使用 --api-key 选项。')
-      process.exit(1)
+      const envApiKey = process.env.OPENAI_API_KEY
+      if (!envApiKey) {
+        console.error(
+          'Error: OpenAI API key is required. Use --api-key option or set OPENAI_API_KEY environment variable.',
+        )
+        process.exit(1)
+      }
+      apiKey = envApiKey
     }
 
-    // 如果没有指定输出文件，则使用 {inputBase}-{targetLang}-{model} 格式
+    let finalApiBaseUrl = apiBaseUrl
+    if (!finalApiBaseUrl) {
+      const envApiBaseUrl = process.env.OPENAI_API_BASE_URL
+      if (envApiBaseUrl) {
+        finalApiBaseUrl = envApiBaseUrl
+      }
+    }
+
     let outputFile = options.output
     if (!outputFile) {
       const inputExt = path.extname(inputFile)
@@ -197,19 +208,18 @@ program
       outputFile = path.join(inputDir, `${inputBase}-${targetLanguage}-${model}${inputExt}`)
     }
 
-    console.log(`输入文件: ${inputFile}`)
-    console.log(`输出文件: ${outputFile}`)
-    console.log(`源语言: ${sourceLanguage}`)
-    console.log(`目标语言: ${targetLanguage}`)
-    console.log(`AI模型: ${model}`)
-    console.log(`每批次最大字符数: ${maxLength}`)
-    console.log(`并发处理批次数: ${concurrency}`)
-    if (apiBaseUrl) {
-      console.log(`API基础URL: ${apiBaseUrl}`)
+    console.log(`Input file: ${inputFile}`)
+    console.log(`Output file: ${outputFile}`)
+    console.log(`Source language: ${sourceLanguage}`)
+    console.log(`Target language: ${targetLanguage}`)
+    console.log(`AI model: ${model}`)
+    console.log(`Max characters per batch: ${maxLength}`)
+    console.log(`Concurrent batches: ${concurrency}`)
+    if (finalApiBaseUrl) {
+      console.log(`API base URL: ${finalApiBaseUrl}`)
     }
     console.log('----------------------------')
 
-    // 创建配置对象并传递给processSubtitles
     const config: TranslationConfig = {
       inputFile,
       outputFile,
@@ -219,7 +229,7 @@ program
       maxLength,
       concurrency,
       apiKey,
-      apiBaseUrl,
+      apiBaseUrl: finalApiBaseUrl,
     }
 
     await processSubtitles(config)
