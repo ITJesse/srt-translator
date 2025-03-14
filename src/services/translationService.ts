@@ -203,8 +203,8 @@ export class TranslationService {
     const allTexts = batches.flat().join('\n')
 
     // 创建术语提取和翻译的系统提示
-    const extractAndTranslatePrompt = `You are a professional terminology extractor and translator. 
-Your task is to identify important terms, names, and recurring phrases from the provided text, and translate them.
+    const extractAndTranslatePrompt = `You are a professional terminology extractor and translator specialized in subtitle content. 
+Your task is to identify important terms, names, and recurring phrases from the provided subtitle text, and translate them.
 ${
   sourceLanguage
     ? `The text is in ${sourceLanguage}. Translate the terms to ${targetLanguage}.`
@@ -216,10 +216,18 @@ Focus on extracting:
 3. Recurring phrases that need consistent translation
 4. Cultural references that require careful translation
 
-Extract only terms that should be consistently translated.
+Extract only terms that appear multiple times and should be consistently translated.
 For each term, provide a high-quality, contextually appropriate translation.
-Respond with a JSON object containing an array of term pairs with original and translated versions.
-Example response format: { "terminology": [{"original": "term1", "translated": "translated term 1"}, {"original": "term2", "translated": "translated term 2"}, ...] }`
+
+IMPORTANT: Your response MUST follow this exact JSON format:
+{
+  "terminology": [
+    {"original": "term1", "translated": "translated term 1"},
+    {"original": "term2", "translated": "translated term 2"}
+  ]
+}
+
+Do not include any text outside of this JSON structure. The response must be valid parseable JSON.`
 
     try {
       // 创建请求选项
@@ -229,7 +237,7 @@ Example response format: { "terminology": [{"original": "term1", "translated": "
           { role: 'system', content: extractAndTranslatePrompt },
           {
             role: 'user',
-            content: `Extract and translate important terms from the following text:\n${allTexts}`,
+            content: `Extract and translate important terms from the following subtitle text:\n\n${allTexts}\n\nRespond only with a valid JSON object containing the terminology array.`,
           },
         ],
         temperature: 0.3,
@@ -291,9 +299,98 @@ Example response format: { "terminology": [{"original": "term1", "translated": "
         this.terminology = parsedContent.terminology.filter(
           (entry: any) => entry && typeof entry === 'object' && entry.original && entry.translated,
         )
-      } else {
-        console.warn('No valid terminology array found in response')
+        console.log(`成功提取 ${this.terminology.length} 个术语`)
+        return
       }
+
+      // 尝试寻找替代键名
+      const alternativeKeys = ['terms', 'entries', 'glossary', 'dictionary', 'translations']
+      for (const key of alternativeKeys) {
+        if (parsedContent[key] && Array.isArray(parsedContent[key])) {
+          // 检查数组元素的格式
+          const formattedTerms = parsedContent[key]
+            .filter((entry: any) => entry && typeof entry === 'object')
+            .map((entry: any) => {
+              // 尝试不同的属性名组合
+              if (entry.original && entry.translated) {
+                return { original: entry.original, translated: entry.translated }
+              } else if (entry.source && entry.target) {
+                return { original: entry.source, translated: entry.target }
+              } else if (entry.term && entry.translation) {
+                return { original: entry.term, translated: entry.translation }
+              } else if (entry.key && entry.value) {
+                return { original: entry.key, translated: entry.value }
+              }
+
+              // 尝试获取第一个和第二个属性（无论名称如何）
+              const keys = Object.keys(entry)
+              if (keys.length >= 2) {
+                return { original: entry[keys[0]], translated: entry[keys[1]] }
+              }
+
+              return null
+            })
+            .filter((entry: any): entry is TerminologyEntry => entry !== null)
+
+          if (formattedTerms.length > 0) {
+            this.terminology = formattedTerms
+            console.log(`成功从替代键 "${key}" 提取 ${this.terminology.length} 个术语`)
+            return
+          }
+        }
+      }
+
+      // 检查是否为数组本身
+      if (Array.isArray(parsedContent)) {
+        const formattedTerms = parsedContent
+          .filter((entry: any) => entry && typeof entry === 'object')
+          .map((entry: any) => {
+            if (entry.original && entry.translated) {
+              return { original: entry.original, translated: entry.translated }
+            } else if (entry.source && entry.target) {
+              return { original: entry.source, translated: entry.target }
+            } else if (entry.term && entry.translation) {
+              return { original: entry.term, translated: entry.translation }
+            }
+
+            // 尝试获取第一个和第二个属性
+            const keys = Object.keys(entry)
+            if (keys.length >= 2) {
+              return { original: entry[keys[0]], translated: entry[keys[1]] }
+            }
+
+            return null
+          })
+          .filter((entry: any): entry is TerminologyEntry => entry !== null)
+
+        if (formattedTerms.length > 0) {
+          this.terminology = formattedTerms
+          console.log(`成功从数组提取 ${this.terminology.length} 个术语`)
+          return
+        }
+      }
+
+      // 检查是否为简单的键值对对象
+      if (typeof parsedContent === 'object' && !Array.isArray(parsedContent)) {
+        const terms = Object.entries(parsedContent)
+          .filter(
+            ([key, value]) =>
+              key !== 'terminology' && typeof value === 'string' && key.trim().length > 0 && value.trim().length > 0,
+          )
+          .map(([key, value]) => ({
+            original: key,
+            translated: value as string,
+          }))
+
+        if (terms.length > 0) {
+          this.terminology = terms
+          console.log(`成功从键值对对象提取 ${this.terminology.length} 个术语`)
+          return
+        }
+      }
+
+      console.warn('无法从响应中提取有效术语，使用空术语表继续')
+      this.terminology = []
     } catch (error) {
       console.error(`Error processing terminology response: ${error}`)
       // 解析失败时清空术语表
@@ -320,7 +417,7 @@ Example response format: { "terminology": [{"original": "term1", "translated": "
           { role: 'system', content: systemPrompt },
           {
             role: 'user',
-            content: `Translate the following subtitle texts (provided as JSON array):\n${batchJson}`,
+            content: `Translate the following subtitle texts (provided as JSON array):\n${batchJson}\n\nProvide the translated texts in a JSON object with a "translations" array in the same order. Example: { "translations": ["translated text 1", "translated text 2", ...] }`,
           },
         ],
         temperature: 0.3,
@@ -434,13 +531,35 @@ Example response format: { "terminology": [{"original": "term1", "translated": "
       }
     }
 
-    // 尝试其他可能的响应格式
+    // 检查是否为数组本身（有些模型可能直接返回翻译数组而非嵌套对象）
     if (
       Array.isArray(parsedContent) &&
       (options.fallbackData.length === 0 || parsedContent.length === options.fallbackData.length)
     ) {
       return parsedContent
     }
+
+    // 尝试提取任何可能的数组属性
+    for (const key in parsedContent) {
+      if (
+        Array.isArray(parsedContent[key]) &&
+        (options.fallbackData.length === 0 || parsedContent[key].length === options.fallbackData.length)
+      ) {
+        console.log(`Found alternative array key: ${key} with matching length`)
+        return parsedContent[key]
+      }
+    }
+
+    // 检查是否包含数字索引的对象（某些模型返回 {"0": "翻译1", "1": "翻译2"}）
+    const numericKeys = Object.keys(parsedContent).filter((key) => !isNaN(Number(key)))
+    if (numericKeys.length === options.fallbackData.length) {
+      return numericKeys.map((key) => parsedContent[key])
+    }
+
+    // 记录更详细的错误信息以便于调试
+    console.error(
+      `Response format doesn't match expected structure. Content sample: ${JSON.stringify(parsedContent).substring(0, 200)}...`,
+    )
 
     // 最后尝试直接返回原始数据，避免整个流程失败
     console.warn(
@@ -523,6 +642,9 @@ Example response format: { "translations": ["translated text 1", "translated tex
       }
 
       prompt += `\nWhen you encounter any of these terms in the source text, you MUST use the provided translation. This ensures consistency throughout the entire subtitle file. Do not translate these terms differently.`
+
+      // 强调响应格式
+      prompt += `\n\nIMPORTANT: Your response MUST be a valid JSON object with the exact format: { "translations": ["translated text 1", "translated text 2", ...] }`
     }
 
     return prompt
