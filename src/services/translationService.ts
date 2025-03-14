@@ -7,13 +7,13 @@ import { CacheService } from './cacheService'
  * Service for handling translations using OpenAI API
  */
 export class TranslationService {
-  private openai: OpenAI;
-  private model: string;
-  private cacheService: CacheService;
-  private lastCacheHits: number = 0;
-  private lastTotalTexts: number = 0;
-  private lastBatchesCount: number = 0;
-  private terminology: TerminologyEntry[] = []; // 术语表
+  private openai: OpenAI
+  private model: string
+  private cacheService: CacheService
+  private lastCacheHits: number = 0
+  private lastTotalTexts: number = 0
+  private lastBatchesCount: number = 0
+  private terminology: TerminologyEntry[] = [] // 术语表
 
   /**
    * Initialize the translation service
@@ -23,28 +23,22 @@ export class TranslationService {
    * @param enableCache Whether to enable caching (default: true)
    * @param cacheDir Cache directory (default: ~/.srt-translator/cache)
    */
-  constructor(
-    apiKey: string,
-    baseUrl: string,
-    model: string,
-    enableCache: boolean = true,
-    cacheDir?: string
-  ) {
+  constructor(apiKey: string, baseUrl: string, model: string, enableCache: boolean = true, cacheDir?: string) {
     if (!apiKey) {
-      throw new Error("API key is required");
+      throw new Error('API key is required')
     }
 
     if (!model) {
-      throw new Error("Model is required");
+      throw new Error('Model is required')
     }
 
     this.openai = new OpenAI({
       apiKey: apiKey,
       baseURL: baseUrl,
-    });
+    })
 
-    this.model = model;
-    this.cacheService = new CacheService(enableCache, cacheDir);
+    this.model = model
+    this.cacheService = new CacheService(enableCache, cacheDir)
   }
 
   /**
@@ -53,10 +47,7 @@ export class TranslationService {
    * @param options Translation options
    * @returns Array of translated text strings
    */
-  public async translateTexts(
-    texts: string[],
-    options: TranslationOptions
-  ): Promise<string[]> {
+  public async translateTexts(texts: string[], options: TranslationOptions): Promise<string[]> {
     const {
       sourceLanguage,
       targetLanguage,
@@ -67,14 +58,14 @@ export class TranslationService {
       concurrentRequests,
       enableCache,
       terminology,
-    } = options;
+    } = options
 
     // 使用传入的模型
-    const modelToUse = model || this.model;
+    const modelToUse = model || this.model
 
     // 设置缓存状态（只控制启用/禁用，不重新设置目录）
     if (enableCache !== undefined) {
-      this.cacheService.setEnabled(enableCache);
+      this.cacheService.setEnabled(enableCache)
     }
 
     // Reinitialize OpenAI client if custom API key or baseUrl is provided
@@ -82,100 +73,114 @@ export class TranslationService {
       this.openai = new OpenAI({
         apiKey: apiKey,
         baseURL: baseUrl,
-      });
+      })
     }
 
     // 创建文本批次
-    const batches = this.createBatches(texts, maxBatchLength as number);
+    const batches = this.createBatches(texts, maxBatchLength as number)
 
     // 存储批次信息
-    this.lastBatchesCount = batches.length;
-    this.lastTotalTexts = texts.length;
-    this.lastCacheHits = 0; // 将在处理API缓存时更新
+    this.lastBatchesCount = batches.length
+    this.lastTotalTexts = texts.length
+    this.lastCacheHits = 0 // 将在处理API缓存时更新
 
-    // 如果启用了术语功能，提取并翻译术语
+    // 如果启用了术语功能，先提取并翻译术语
     if (terminology) {
-      await this.extractAndTranslateTermsInOneStep(
-        batches,
-        sourceLanguage,
-        targetLanguage,
-        modelToUse
-      );
+      console.log('正在提取并翻译术语...')
+      await this.extractAndTranslateTermsInOneStep(batches, sourceLanguage, targetLanguage, modelToUse)
+
+      // 如果成功提取到术语，显示提取到的术语数量
+      if (this.terminology.length > 0) {
+        console.log(`已提取并翻译 ${this.terminology.length} 个术语，将在翻译中保持一致性`)
+      } else {
+        console.log('未从内容中提取到重要术语')
+      }
     }
 
     // Prepare the system prompt
     const systemPrompt = this.createSystemPrompt(
       targetLanguage,
       sourceLanguage,
-      terminology ? this.terminology : undefined
-    );
+      terminology ? this.terminology : undefined,
+    )
 
     // 翻译批次
-    const batchResults: string[][] = [];
-    let cacheHits = 0;
+    let cacheHits = 0
 
     // 使用并行处理批次
-    const parallelRequests = concurrentRequests || 1;
-    const batchPromises = batches.map(async (batch, index) => {
-      // 创建请求选项用于缓存检查
-      const requestOptions: any = {
-        model: modelToUse,
-        messages: [
-          { role: "system", content: systemPrompt },
-          {
-            role: "user",
-            content: `Translate the following subtitle texts (provided as JSON array):\n${JSON.stringify(
-              batch
-            )}`,
-          },
-        ],
-        temperature: 0.3,
-        response_format: { type: "json_object" },
-      };
+    const parallelRequests = concurrentRequests || 1
 
-      // 检查API请求缓存
-      const cachedResponse = this.cacheService.getApiResponse(requestOptions);
-      if (cachedResponse) {
-        // 如果有缓存的API响应，直接使用
-        cacheHits++;
-        const content = cachedResponse.choices[0]?.message.content;
-        if (content) {
-          try {
-            const translations = this.processResponseContent(content, batch);
-            return { index, translations };
-          } catch (error) {
-            console.error(`Error processing cached response: ${error}`);
-            // 如果处理缓存失败，继续正常翻译流程
+    // 如果启用了术语功能，在开始翻译前显示提示
+    if (terminology && this.terminology.length > 0) {
+      console.log('开始使用提取的术语表进行翻译...')
+    }
+
+    // 实现并发控制的批次处理
+    const results: { index: number; translations: string[] }[] = []
+
+    // 将批次分组，每组最多包含 parallelRequests 个批次
+    for (let i = 0; i < batches.length; i += parallelRequests) {
+      const currentBatchGroup = batches.slice(i, i + parallelRequests)
+
+      // 并行处理当前组中的批次
+      const groupPromises = currentBatchGroup.map(async (batch, groupIndex) => {
+        const batchIndex = i + groupIndex
+
+        // 创建请求选项用于缓存检查
+        const requestOptions: any = {
+          model: modelToUse,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            {
+              role: 'user',
+              content: `Translate the following subtitle texts (provided as JSON array):\n${JSON.stringify(batch)}`,
+            },
+          ],
+          temperature: 0.3,
+          response_format: { type: 'json_object' },
+        }
+
+        // 检查API请求缓存
+        const cachedResponse = this.cacheService.getApiResponse(requestOptions)
+        if (cachedResponse) {
+          // 如果有缓存的API响应，直接使用
+          cacheHits++
+          const content = cachedResponse.choices[0]?.message.content
+          if (content) {
+            try {
+              const translations = this.processResponseContent(content, batch)
+              return { index: batchIndex, translations }
+            } catch (error) {
+              console.error(`Error processing cached response: ${error}`)
+              // 如果处理缓存失败，继续正常翻译流程
+            }
           }
         }
-      }
 
-      // 如果没有缓存或缓存处理失败，翻译批次
-      try {
-        const translations = await this.translateBatch(
-          batch,
-          systemPrompt,
-          modelToUse
-        );
-        return { index, translations };
-      } catch (error) {
-        console.error(`Error translating batch ${index}: ${error}`);
-        // 返回空结果，避免整个过程失败
-        return { index, translations: batch.map(() => "") };
-      }
-    });
+        // 如果没有缓存或缓存处理失败，翻译批次
+        try {
+          const translations = await this.translateBatch(batch, systemPrompt, modelToUse)
+          return { index: batchIndex, translations }
+        } catch (error) {
+          console.error(`Error translating batch ${batchIndex}: ${error}`)
+          // 返回空结果，避免整个过程失败
+          return { index: batchIndex, translations: batch.map(() => '') }
+        }
+      })
 
-    // 等待所有批次处理完成
-    const results = await Promise.all(batchPromises);
+      // 等待当前组中所有批次处理完成
+      const groupResults = await Promise.all(groupPromises)
+      results.push(...groupResults)
+    }
 
     // 按原始批次顺序整理结果
-    results.sort((a, b) => a.index - b.index);
-    const allTranslations = results.flatMap((result) => result.translations);
+    results.sort((a, b) => a.index - b.index)
+    const allTranslations = results.flatMap((result) => result.translations)
 
     // 更新缓存命中信息
-    this.lastCacheHits = cacheHits;
+    this.lastCacheHits = cacheHits
 
-    return allTranslations;
+    return allTranslations
   }
 
   /**
@@ -189,13 +194,13 @@ export class TranslationService {
     batches: string[][],
     sourceLanguage: string | undefined,
     targetLanguage: string,
-    model: string
+    model: string,
   ): Promise<void> {
     // 清空现有术语表
-    this.terminology = [];
+    this.terminology = []
 
     // 合并所有批次文本用于术语提取
-    const allTexts = batches.flat().join("\n");
+    const allTexts = batches.flat().join('\n')
 
     // 创建术语提取和翻译的系统提示
     const extractAndTranslatePrompt = `You are a professional terminology extractor and translator. 
@@ -205,62 +210,61 @@ ${
     ? `The text is in ${sourceLanguage}. Translate the terms to ${targetLanguage}.`
     : `Translate the terms to ${targetLanguage}.`
 }
+Focus on extracting:
+1. Character names and proper nouns
+2. Technical terms and specialized vocabulary
+3. Recurring phrases that need consistent translation
+4. Cultural references that require careful translation
+
 Extract only terms that should be consistently translated.
+For each term, provide a high-quality, contextually appropriate translation.
 Respond with a JSON object containing an array of term pairs with original and translated versions.
-Example response format: { "terminology": [{"original": "term1", "translated": "translated term 1"}, {"original": "term2", "translated": "translated term 2"}, ...] }`;
+Example response format: { "terminology": [{"original": "term1", "translated": "translated term 1"}, {"original": "term2", "translated": "translated term 2"}, ...] }`
 
     try {
       // 创建请求选项
       const requestOptions: any = {
         model,
         messages: [
-          { role: "system", content: extractAndTranslatePrompt },
+          { role: 'system', content: extractAndTranslatePrompt },
           {
-            role: "user",
+            role: 'user',
             content: `Extract and translate important terms from the following text:\n${allTexts}`,
           },
         ],
         temperature: 0.3,
-        response_format: { type: "json_object" },
-      };
+        response_format: { type: 'json_object' },
+      }
 
       // 检查API请求缓存
-      const cachedResponse = this.cacheService.getApiResponse(requestOptions);
+      const cachedResponse = this.cacheService.getApiResponse(requestOptions)
       if (cachedResponse) {
         // 如果有缓存的API响应，直接使用
-        const content = cachedResponse.choices[0]?.message.content;
+        const content = cachedResponse.choices[0]?.message.content
         if (content) {
-          this.processTerminologyResponse(content);
-          return;
+          this.processTerminologyResponse(content)
+          return
         }
       }
 
       // 如果没有缓存或缓存处理失败，发送API请求
-      const response = await this.openai.chat.completions.create(
-        requestOptions
-      );
+      const response = await this.openai.chat.completions.create(requestOptions)
 
       // 缓存API响应
       if (this.cacheService.isEnabled()) {
-        this.cacheService.setApiResponse(requestOptions, response);
+        this.cacheService.setApiResponse(requestOptions, response)
       }
 
-      const content = response.choices[0]?.message.content;
+      const content = response.choices[0]?.message.content
       if (!content) {
-        throw new Error(
-          "No content in terminology extraction and translation response"
-        );
+        throw new Error('No content in terminology extraction and translation response')
       }
 
-      this.processTerminologyResponse(content);
+      this.processTerminologyResponse(content)
     } catch (error) {
-      console.error(
-        `Error extracting and translating terms: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
+      console.error(`Error extracting and translating terms: ${error instanceof Error ? error.message : String(error)}`)
       // 出错时清空术语表，继续正常翻译流程
-      this.terminology = [];
+      this.terminology = []
     }
   }
 
@@ -271,39 +275,29 @@ Example response format: { "terminology": [{"original": "term1", "translated": "
   private processTerminologyResponse(content: string): void {
     try {
       // 清理内容，移除可能的 Markdown 代码块标记
-      const cleanedContent = this.cleanJsonContent(content);
+      const cleanedContent = this.cleanJsonContent(content)
 
       // 解析JSON响应
-      let parsedContent;
+      let parsedContent
       try {
-        parsedContent = JSON.parse(cleanedContent);
+        parsedContent = JSON.parse(cleanedContent)
       } catch (error) {
-        console.error(
-          "Failed to parse JSON terminology response:",
-          cleanedContent
-        );
-        return;
+        console.error('Failed to parse JSON terminology response:', cleanedContent)
+        return
       }
 
       // 检查是否有术语数组
-      if (
-        parsedContent.terminology &&
-        Array.isArray(parsedContent.terminology)
-      ) {
+      if (parsedContent.terminology && Array.isArray(parsedContent.terminology)) {
         this.terminology = parsedContent.terminology.filter(
-          (entry: any) =>
-            entry &&
-            typeof entry === "object" &&
-            entry.original &&
-            entry.translated
-        );
+          (entry: any) => entry && typeof entry === 'object' && entry.original && entry.translated,
+        )
       } else {
-        console.warn("No valid terminology array found in response");
+        console.warn('No valid terminology array found in response')
       }
     } catch (error) {
-      console.error(`Error processing terminology response: ${error}`);
+      console.error(`Error processing terminology response: ${error}`)
       // 解析失败时清空术语表
-      this.terminology = [];
+      this.terminology = []
     }
   }
 
@@ -314,64 +308,54 @@ Example response format: { "terminology": [{"original": "term1", "translated": "
    * @param model OpenAI model to use
    * @returns Array of translated text strings
    */
-  private async translateBatch(
-    batch: string[],
-    systemPrompt: string,
-    model: string
-  ): Promise<string[]> {
+  private async translateBatch(batch: string[], systemPrompt: string, model: string): Promise<string[]> {
     try {
       // Format the batch as a JSON array string
-      const batchJson = JSON.stringify(batch);
+      const batchJson = JSON.stringify(batch)
 
       // 创建请求选项
       const requestOptions: any = {
         model,
         messages: [
-          { role: "system", content: systemPrompt },
+          { role: 'system', content: systemPrompt },
           {
-            role: "user",
+            role: 'user',
             content: `Translate the following subtitle texts (provided as JSON array):\n${batchJson}`,
           },
         ],
         temperature: 0.3,
-        response_format: { type: "json_object" },
-      };
+        response_format: { type: 'json_object' },
+      }
 
       // 检查API请求缓存
-      const cachedResponse = this.cacheService.getApiResponse(requestOptions);
+      const cachedResponse = this.cacheService.getApiResponse(requestOptions)
       if (cachedResponse) {
         // 如果有缓存的API响应，直接使用
-        const content = cachedResponse.choices[0]?.message.content;
+        const content = cachedResponse.choices[0]?.message.content
         if (content) {
           // 处理缓存的响应内容
-          return this.processResponseContent(content, batch);
+          return this.processResponseContent(content, batch)
         }
       }
 
       // 如果没有缓存或缓存处理失败，发送API请求
-      const response = await this.openai.chat.completions.create(
-        requestOptions
-      );
+      const response = await this.openai.chat.completions.create(requestOptions)
 
       // 缓存API响应
       if (this.cacheService.isEnabled()) {
-        this.cacheService.setApiResponse(requestOptions, response);
+        this.cacheService.setApiResponse(requestOptions, response)
       }
 
-      const content = response.choices[0]?.message.content;
+      const content = response.choices[0]?.message.content
 
       if (!content) {
-        throw new Error("No content in translation response");
+        throw new Error('No content in translation response')
       }
 
-      return this.processResponseContent(content, batch);
+      return this.processResponseContent(content, batch)
     } catch (error) {
-      console.error(
-        `Translation error: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-      throw error;
+      console.error(`Translation error: ${error instanceof Error ? error.message : String(error)}`)
+      throw error
     }
   }
 
@@ -385,16 +369,16 @@ Example response format: { "terminology": [{"original": "term1", "translated": "
     try {
       // 使用通用处理方法处理响应内容
       const result = this.processAIResponse(content, {
-        expectedArrayKey: "translations",
-        alternativeArrayKeys: ["terms"],
+        expectedArrayKey: 'translations',
+        alternativeArrayKeys: ['terms'],
         fallbackData: batch,
-      });
+      })
 
-      return result;
+      return result
     } catch (error) {
-      console.error(`Error processing response content: ${error}`);
+      console.error(`Error processing response content: ${error}`)
       // 出错时返回原始批次，避免整个流程失败
-      return batch;
+      return batch
     }
   }
 
@@ -411,70 +395,58 @@ Example response format: { "terminology": [{"original": "term1", "translated": "
   private processAIResponse(
     content: string,
     options: {
-      expectedArrayKey: string;
-      alternativeArrayKeys: string[];
-      fallbackData: any[];
-    }
+      expectedArrayKey: string
+      alternativeArrayKeys: string[]
+      fallbackData: any[]
+    },
   ): any[] {
     // 清理内容，移除可能的 Markdown 代码块标记
-    const cleanedContent = this.cleanJsonContent(content);
+    const cleanedContent = this.cleanJsonContent(content)
 
     // 解析JSON响应
-    let parsedContent;
+    let parsedContent
     try {
-      parsedContent = JSON.parse(cleanedContent);
+      parsedContent = JSON.parse(cleanedContent)
     } catch (error) {
-      console.error("Failed to parse JSON response:", cleanedContent);
+      console.error('Failed to parse JSON response:', cleanedContent)
       // 尝试从非JSON响应中提取结果
-      if (
-        Array.isArray(options.fallbackData) &&
-        cleanedContent.includes("\n")
-      ) {
+      if (Array.isArray(options.fallbackData) && cleanedContent.includes('\n')) {
         // 假设每行对应一个结果
-        const lines = cleanedContent.split("\n").filter((line) => line.trim());
+        const lines = cleanedContent.split('\n').filter((line) => line.trim())
         if (lines.length === options.fallbackData.length) {
-          return lines;
+          return lines
         }
       }
 
       // 增强错误信息，包含更多上下文
-      throw new Error(
-        `Invalid response format: not valid JSON. Content: ${cleanedContent.substring(
-          0,
-          100
-        )}...`
-      );
+      throw new Error(`Invalid response format: not valid JSON. Content: ${cleanedContent.substring(0, 100)}...`)
     }
 
     // 检查是否有预期的数组键
-    if (
-      parsedContent[options.expectedArrayKey] &&
-      Array.isArray(parsedContent[options.expectedArrayKey])
-    ) {
-      return parsedContent[options.expectedArrayKey];
+    if (parsedContent[options.expectedArrayKey] && Array.isArray(parsedContent[options.expectedArrayKey])) {
+      return parsedContent[options.expectedArrayKey]
     }
 
     // 检查替代数组键
     for (const key of options.alternativeArrayKeys) {
       if (parsedContent[key] && Array.isArray(parsedContent[key])) {
-        return parsedContent[key];
+        return parsedContent[key]
       }
     }
 
     // 尝试其他可能的响应格式
     if (
       Array.isArray(parsedContent) &&
-      (options.fallbackData.length === 0 ||
-        parsedContent.length === options.fallbackData.length)
+      (options.fallbackData.length === 0 || parsedContent.length === options.fallbackData.length)
     ) {
-      return parsedContent;
+      return parsedContent
     }
 
     // 最后尝试直接返回原始数据，避免整个流程失败
     console.warn(
-      `Could not find valid data in response (expected key: ${options.expectedArrayKey}), using fallback data`
-    );
-    return options.fallbackData;
+      `Could not find valid data in response (expected key: ${options.expectedArrayKey}), using fallback data`,
+    )
+    return options.fallbackData
   }
 
   /**
@@ -483,31 +455,29 @@ Example response format: { "terminology": [{"original": "term1", "translated": "
    * @returns 清理后的JSON内容
    */
   private cleanJsonContent(content: string): string {
-    let cleanedContent = content.trim();
+    let cleanedContent = content.trim()
 
     // 处理完整的代码块格式 ```json ... ```
-    const jsonBlockRegex = /^```(?:json)?\s*([\s\S]*?)```\s*$/;
-    const match = cleanedContent.match(jsonBlockRegex);
+    const jsonBlockRegex = /^```(?:json)?\s*([\s\S]*?)```\s*$/
+    const match = cleanedContent.match(jsonBlockRegex)
     if (match) {
-      return match[1].trim();
+      return match[1].trim()
     }
 
     // 处理只有开头的代码块标记
-    if (cleanedContent.startsWith("```")) {
-      const firstLineEnd = cleanedContent.indexOf("\n");
+    if (cleanedContent.startsWith('```')) {
+      const firstLineEnd = cleanedContent.indexOf('\n')
       if (firstLineEnd !== -1) {
-        cleanedContent = cleanedContent.substring(firstLineEnd + 1);
+        cleanedContent = cleanedContent.substring(firstLineEnd + 1)
       }
     }
 
     // 处理只有结尾的代码块标记
-    if (cleanedContent.endsWith("```")) {
-      cleanedContent = cleanedContent
-        .substring(0, cleanedContent.lastIndexOf("```"))
-        .trim();
+    if (cleanedContent.endsWith('```')) {
+      cleanedContent = cleanedContent.substring(0, cleanedContent.lastIndexOf('```')).trim()
     }
 
-    return cleanedContent;
+    return cleanedContent
   }
 
   /**
@@ -520,40 +490,42 @@ Example response format: { "terminology": [{"original": "term1", "translated": "
   private createSystemPrompt(
     targetLanguage: string,
     sourceLanguage?: string,
-    terminology?: TerminologyEntry[]
+    terminology?: TerminologyEntry[],
   ): string {
-    let prompt = `You are a professional subtitle translator. `;
+    let prompt = `You are a professional subtitle translator. `
 
     if (sourceLanguage) {
-      prompt += `Translate from ${sourceLanguage} to ${targetLanguage}. `;
+      prompt += `Translate from ${sourceLanguage} to ${targetLanguage}. `
     } else {
-      prompt += `Translate to ${targetLanguage}. `;
+      prompt += `Translate to ${targetLanguage}. `
     }
 
     // 始终保留格式
-    prompt += `Preserve all formatting, line breaks, and special characters. `;
+    prompt += `Preserve all formatting, line breaks, and special characters. `
 
     prompt += `
 Your task is to translate each subtitle text accurately while maintaining the original meaning and tone.
 Respond with a JSON object containing a "translations" array with the translated texts in the same order as the input.
 Example response format: { "translations": ["translated text 1", "translated text 2", ...] }
-`;
+`
 
-    // 如果有术语表，添加到提示中
+    // 如果有术语表，添加到提示中并强调其重要性
     if (terminology && terminology.length > 0) {
-      prompt += `\nPlease use the following terminology consistently in your translations:\n`;
+      prompt += `\nIMPORTANT: You MUST use the following terminology consistently in your translations. These terms have been pre-translated specifically for this content and must be used exactly as provided:\n`
 
       // 将术语表格式化为表格形式
-      prompt += `Original | Translation\n`;
-      prompt += `-------- | -----------\n`;
+      prompt += `Original | Translation\n`
+      prompt += `-------- | -----------\n`
 
       // 添加术语表条目
       for (const entry of terminology) {
-        prompt += `${entry.original} | ${entry.translated}\n`;
+        prompt += `${entry.original} | ${entry.translated}\n`
       }
+
+      prompt += `\nWhen you encounter any of these terms in the source text, you MUST use the provided translation. This ensures consistency throughout the entire subtitle file. Do not translate these terms differently.`
     }
 
-    return prompt;
+    return prompt
   }
 
   /**
@@ -561,7 +533,7 @@ Example response format: { "translations": ["translated text 1", "translated tex
    * @returns 缓存服务实例
    */
   public getCacheService(): CacheService {
-    return this.cacheService;
+    return this.cacheService
   }
 
   /**
@@ -569,7 +541,7 @@ Example response format: { "translations": ["translated text 1", "translated tex
    * @returns 当前使用的模型名称
    */
   public getModel(): string {
-    return this.model;
+    return this.model
   }
 
   /**
@@ -580,7 +552,7 @@ Example response format: { "translations": ["translated text 1", "translated tex
     return {
       hits: this.lastCacheHits,
       total: this.lastTotalTexts,
-    };
+    }
   }
 
   /**
@@ -588,7 +560,7 @@ Example response format: { "translations": ["translated text 1", "translated tex
    * @returns 批次数量
    */
   public getLastBatchesCount(): number {
-    return this.lastBatchesCount;
+    return this.lastBatchesCount
   }
 
   /**
@@ -596,7 +568,7 @@ Example response format: { "translations": ["translated text 1", "translated tex
    * @returns 术语表
    */
   public getTerminology(): TerminologyEntry[] {
-    return [...this.terminology];
+    return [...this.terminology]
   }
 
   /**
@@ -604,14 +576,14 @@ Example response format: { "translations": ["translated text 1", "translated tex
    * @param terminology 术语表
    */
   public setTerminology(terminology: TerminologyEntry[]): void {
-    this.terminology = [...terminology];
+    this.terminology = [...terminology]
   }
 
   /**
    * 清空术语表
    */
   public clearTerminology(): void {
-    this.terminology = [];
+    this.terminology = []
   }
 
   /**
@@ -621,31 +593,28 @@ Example response format: { "translations": ["translated text 1", "translated tex
    * @returns Array of batches
    */
   private createBatches(texts: string[], maxBatchLength: number): string[][] {
-    const batches: string[][] = [];
-    let currentBatch: string[] = [];
-    let currentBatchLength = 0;
+    const batches: string[][] = []
+    let currentBatch: string[] = []
+    let currentBatchLength = 0
 
     for (const text of texts) {
       // 如果当前批次为空或添加此文本后不超过最大长度，则添加到当前批次
-      if (
-        currentBatch.length === 0 ||
-        currentBatchLength + text.length <= maxBatchLength
-      ) {
-        currentBatch.push(text);
-        currentBatchLength += text.length;
+      if (currentBatch.length === 0 || currentBatchLength + text.length <= maxBatchLength) {
+        currentBatch.push(text)
+        currentBatchLength += text.length
       } else {
         // 否则，完成当前批次并开始新批次
-        batches.push(currentBatch);
-        currentBatch = [text];
-        currentBatchLength = text.length;
+        batches.push(currentBatch)
+        currentBatch = [text]
+        currentBatchLength = text.length
       }
     }
 
     // 添加最后一个批次（如果有）
     if (currentBatch.length > 0) {
-      batches.push(currentBatch);
+      batches.push(currentBatch)
     }
 
-    return batches;
+    return batches
   }
 }

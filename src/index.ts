@@ -130,6 +130,11 @@ class SrtTranslator {
       if (enableCache) {
         console.log(`Cache directory: ${cacheDir}`);
       }
+      if (terminology) {
+        console.log(
+          `Terminology extraction: enabled (将先提取术语，再进行翻译)`
+        );
+      }
 
       // 创建解析进度条
       this.createProgressBar(1, "Parsing subtitles");
@@ -145,7 +150,7 @@ class SrtTranslator {
         this.srtService.extractTextForTranslation(subtitles);
 
       // 在创建进度条前输出翻译信息
-      console.log("Starting translation...");
+      console.log("Starting translation process...");
       console.log(
         `Using translation model: ${
           model || this.translationService.getModel()
@@ -207,9 +212,9 @@ class SrtTranslator {
         const terminologyInfo = this.translationService.getTerminology();
         if (terminologyInfo.length > 0) {
           console.log(
-            `\nExtracted and translated ${terminologyInfo.length} terms for consistent translation:`
+            `\n术语提取与翻译总结：已提取并翻译 ${terminologyInfo.length} 个术语，并在翻译过程中保持一致性`
           );
-          console.log("Original | Translation");
+          console.log("原文术语 | 翻译");
           console.log("-------- | -----------");
           // 只显示前10个术语，避免输出过多
           const displayCount = Math.min(terminologyInfo.length, 10);
@@ -219,12 +224,10 @@ class SrtTranslator {
             );
           }
           if (terminologyInfo.length > 10) {
-            console.log(`... and ${terminologyInfo.length - 10} more terms`);
+            console.log(`... 以及其他 ${terminologyInfo.length - 10} 个术语`);
           }
         } else {
-          console.log(
-            "\nNo significant terms were extracted for this content."
-          );
+          console.log("\n术语提取结果：未从内容中提取到重要术语。");
         }
       }
 
@@ -270,6 +273,23 @@ class SrtTranslator {
       }
 
       console.log(`Found ${inputFiles.length} SRT files to process`);
+
+      // 初始化翻译服务
+      this.translationService = new TranslationService(
+        options.apiKey,
+        options.baseUrl,
+        options.model,
+        options.enableCache,
+        options.cacheDir
+      );
+
+      // 如果启用了术语功能，显示相关信息
+      if (options.terminology) {
+        console.log(
+          `Terminology extraction: enabled (将先提取术语，再进行翻译)`
+        );
+      }
+
       this.createProgressBar(inputFiles.length, "Batch processing progress");
       let processedCount = 0;
 
@@ -299,21 +319,18 @@ class SrtTranslator {
       );
 
       this.stopProgressBar();
-      console.log("Batch processing completed!");
 
       // 输出批处理完成信息
-      console.log(
-        `\nBatch processing completed: ${processedCount} files translated successfully.`
-      );
+      console.log(`\n批处理已完成: ${processedCount} 个文件翻译成功。`);
 
       // 如果启用了术语提取，显示术语表信息
       if (options.terminology) {
         const terminologyInfo = this.translationService.getTerminology();
         if (terminologyInfo.length > 0) {
           console.log(
-            `\nExtracted and translated ${terminologyInfo.length} terms for consistent translation:`
+            `\n术语提取与翻译总结：已提取并翻译 ${terminologyInfo.length} 个术语，并在翻译过程中保持一致性`
           );
-          console.log("Original | Translation");
+          console.log("原文术语 | 翻译");
           console.log("-------- | -----------");
           // 只显示前10个术语，避免输出过多
           const displayCount = Math.min(terminologyInfo.length, 10);
@@ -323,12 +340,10 @@ class SrtTranslator {
             );
           }
           if (terminologyInfo.length > 10) {
-            console.log(`... and ${terminologyInfo.length - 10} more terms`);
+            console.log(`... 以及其他 ${terminologyInfo.length - 10} 个术语`);
           }
         } else {
-          console.log(
-            "\nNo significant terms were extracted for this content."
-          );
+          console.log("\n术语提取结果：未从内容中提取到重要术语。");
         }
       }
     } catch (error) {
