@@ -21,17 +21,20 @@ A command-line tool to translate SRT subtitle files using AI (OpenAI).
 ### Setup
 
 1. Clone this repository:
+
    ```
    git clone https://github.com/yourusername/srt-translator.git
    cd srt-translator
    ```
 
 2. Install dependencies:
+
    ```
    yarn install
    ```
 
 3. Build the project:
+
    ```
    yarn build
    ```
@@ -47,16 +50,19 @@ A command-line tool to translate SRT subtitle files using AI (OpenAI).
 You can install the tool globally to use it from anywhere:
 
 1. Link the package globally:
+
    ```
    yarn link
    ```
-   
+
    Or if you prefer npm:
+
    ```
    npm link
    ```
 
 2. Now you can use the `srt-translator` command from anywhere:
+
    ```
    srt-translator path/to/subtitles.srt -t Chinese
    ```
@@ -95,32 +101,45 @@ Arguments:
 Options:
   -o, --output <path>         Output SRT file path
   -s, --source-language <language>  Source language (auto-detect if not specified)
-  -t, --target-language <language>  Target language (default: "English")
-  -m, --model <model>         OpenAI model to use (default: "gpt-3.5-turbo")
-  -p, --preserve-formatting   Preserve original formatting (default: true)
+  -t, --target-language <language>  Target language
+  -m, --model <model>         OpenAI model to use
+  -p, --preserve-formatting   Preserve original formatting
   -k, --api-key <key>         OpenAI API key (overrides OPENAI_API_KEY environment variable)
+  -b, --base-url <url>        OpenAI API base URL (overrides OPENAI_API_BASE_URL environment variable)
+  -l, --max-batch-length <length>  Maximum character length per batch
+  -v, --verbose               Enable verbose logging
   -h, --help                  Display help for command
   -V, --version               Output the version number
+
+Default values:
+  - Target language: English
+  - Model: Value from DEFAULT_MODEL environment variable or gpt-3.5-turbo
+  - Preserve formatting: true
+  - Max batch length: 2000 characters
 ```
 
 ### Examples
 
 Translate to Spanish:
+
 ```bash
 yarn translate subtitles.srt -t Spanish
 ```
 
 Specify source and target languages:
+
 ```bash
 yarn translate subtitles.srt -s English -t French
 ```
 
 Use a different OpenAI model:
+
 ```bash
 yarn translate subtitles.srt -t German -m gpt-4
 ```
 
 Specify output file:
+
 ```bash
 yarn translate subtitles.srt -t Japanese -o translated_subtitles.srt
 ```
