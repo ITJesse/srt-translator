@@ -1,176 +1,165 @@
 # SRT Translator
 
-A command-line tool to translate SRT subtitle files using AI (OpenAI).
+一个使用AI（OpenAI）翻译SRT字幕文件的命令行工具。
 
-## Features
+## 功能特点
 
-- Translate SRT subtitle files to any language
-- Preserve original formatting and timing
-- Support for various OpenAI models
-- Batch processing to handle large subtitle files
-- Command-line interface for easy integration
+- 将SRT字幕文件翻译成任何语言
+- 保留原始格式和时间轴
+- 支持各种OpenAI模型
+- 批处理以处理大型字幕文件
+- 命令行界面，便于集成
 
-## Installation
+## 安装
 
-### Prerequisites
+### 前提条件
 
-- Node.js (v14 or later)
-- Yarn or npm
-- OpenAI API key
+- Node.js (v14或更高版本)
+- Yarn或npm
+- OpenAI API密钥
 
-### Setup
+### 设置
 
-1. Clone this repository:
+1. 克隆此仓库:
 
    ```
    git clone https://github.com/yourusername/srt-translator.git
    cd srt-translator
    ```
 
-2. Install dependencies:
+2. 安装依赖:
 
    ```
    yarn install
    ```
 
-3. Build the project:
+3. 构建项目:
 
    ```
    yarn build
    ```
 
-4. Create a `.env` file with your OpenAI API key:
+4. 创建包含OpenAI API密钥的`.env`文件:
    ```
    cp .env.example .env
    ```
-   Then edit the `.env` file and add your OpenAI API key.
+   然后编辑`.env`文件并添加您的OpenAI API密钥。
 
-### Global Installation
+### 全局安装
 
-You can install the tool globally to use it from anywhere:
+您可以全局安装该工具，以便在任何地方使用:
 
-1. Link the package globally:
+1. 全局链接包:
 
    ```
    yarn link
    ```
 
-   Or if you prefer npm:
+   或者如果你喜欢npm:
 
    ```
    npm link
    ```
 
-2. Now you can use the `srt-translator` command from anywhere:
+2. 现在，您可以从任何地方使用`srt-translator`命令:
 
    ```
-   srt-translator path/to/subtitles.srt -t Chinese
+   srt-translator path/to/subtitles.srt -t chinese
    ```
 
-3. Alternatively, you can install directly from GitHub:
+3. 或者，您可以直接从GitHub安装:
    ```
    npm install -g github:yourusername/srt-translator
    ```
 
-## Usage
+## 使用方法
 
-### Basic Usage
-
-```bash
-yarn translate path/to/subtitles.srt -t Chinese
-```
-
-This will translate the subtitles to Chinese and save the output to `path/to/subtitles.Chinese.srt`.
-
-If installed globally:
+### 基本用法
 
 ```bash
-srt-translator path/to/subtitles.srt -t Chinese
+srt-translator path/to/subtitles.srt
 ```
 
-### Command-line Options
+这将使用默认设置（从英文翻译到中文）翻译字幕，并将输出保存到`path/to/translated_subtitles.srt`。
+
+### 命令行选项
 
 ```
-Usage: srt-translator [options] <input>
+用法: srt-translator [选项] <inputFile>
 
-Translate SRT subtitle files using AI
+使用AI翻译SRT字幕文件的命令行工具
 
-Arguments:
-  input                       Input SRT file path
+参数:
+  inputFile                  输入的SRT文件路径
 
-Options:
-  -o, --output <path>         Output SRT file path
-  -s, --source-language <language>  Source language (auto-detect if not specified)
-  -t, --target-language <language>  Target language
-  -m, --model <model>         OpenAI model to use
-  -k, --api-key <key>         OpenAI API key (overrides OPENAI_API_KEY environment variable)
-  -b, --base-url <url>        OpenAI API base URL (overrides OPENAI_API_BASE_URL environment variable)
-  -l, --max-batch-length <length>  Maximum character length per batch
-  -v, --verbose               Enable verbose logging
-  -h, --help                  Display help for command
-  -V, --version               Output the version number
-
-Default values:
-  - Target language: English
-  - Model: Value from DEFAULT_MODEL environment variable or gpt-3.5-turbo
-  - Max batch length: 2000 characters
+选项:
+  -o, --output <file>        输出的SRT文件路径（默认为输入文件名加前缀）
+  -s, --source <language>    源语言 (默认: "english")
+  -t, --target <language>    目标语言 (默认: "chinese")
+  -m, --model <name>         AI模型名称 (默认: "gpt-4o")
+  -l, --max-length <number>  每批次的最大字符数 (默认: 2000)
+  -c, --concurrency <number> 并发处理的批次数 (默认: 10)
+  -V, --version              输出版本号
+  -h, --help                 显示帮助信息
 ```
 
-### Examples
+### 示例
 
-Translate to Spanish:
+翻译为日语:
 
 ```bash
-yarn translate subtitles.srt -t Spanish
+srt-translator subtitles.srt -t japanese
 ```
 
-Specify source and target languages:
+指定源语言和目标语言:
 
 ```bash
-yarn translate subtitles.srt -s English -t French
+srt-translator subtitles.srt -s english -t french
 ```
 
-Use a different OpenAI model:
+使用不同的OpenAI模型:
 
 ```bash
-yarn translate subtitles.srt -t German -m gpt-4
+srt-translator subtitles.srt -t german -m gpt-3.5-turbo
 ```
 
-Specify output file:
+指定输出文件:
 
 ```bash
-yarn translate subtitles.srt -t Japanese -o translated_subtitles.srt
+srt-translator subtitles.srt -t japanese -o translated_japanese.srt
 ```
 
-## Development
+调整批处理大小和并发数:
 
-### Project Structure
+```bash
+srt-translator subtitles.srt -l 1500 -c 5
+```
+
+## 开发
+
+### 项目结构
 
 ```
 srt-translator/
 ├── src/
-│   ├── index.ts              # Main entry point
-│   ├── services/
-│   │   ├── srtService.ts     # SRT file handling
-│   │   └── translationService.ts # AI translation
-│   ├── types/
-│   │   └── index.ts          # Type definitions
-│   └── utils/
-│       └── fileUtils.ts      # File utilities
-├── dist/                     # Compiled JavaScript
-├── .env.example              # Example environment variables
-├── .env                      # Environment variables (create this)
-├── package.json              # Project configuration
-└── tsconfig.json             # TypeScript configuration
+│   ├── index.ts           # 主入口点和CLI工具
+│   └── lib/
+│       ├── srt.ts         # SRT文件处理
+│       ├── translate.ts   # AI翻译服务
+│       └── prompts.ts     # 翻译提示模板
+├── dist/                  # 编译后的JavaScript
+├── .env.example           # 环境变量示例
+├── .env                   # 环境变量（需创建）
+├── package.json           # 项目配置
+└── tsconfig.json          # TypeScript配置
 ```
 
-### Scripts
+### 脚本
 
-- `yarn build`: Build the project
-- `yarn start`: Run the compiled code
-- `yarn dev`: Run with ts-node (development)
-- `yarn translate`: Alias for `yarn dev`
+- `yarn build`: 构建项目
+- `yarn start`: 运行编译后的代码
+- `yarn dev`: 使用ts-node运行（开发环境）
 
-## License
+## 许可证
 
 MIT
