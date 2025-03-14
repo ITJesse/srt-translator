@@ -2,7 +2,6 @@
 
 import { Command } from 'commander'
 import * as dotenv from 'dotenv'
-import * as fs from 'fs'
 import { glob } from 'glob'
 import * as path from 'path'
 
@@ -54,20 +53,8 @@ class SrtTranslator {
         apiKey,
         baseUrl,
         maxBatchLength,
+        concurrentRequests,
       } = options;
-
-      // 确保必要参数不为 undefined
-      if (!apiKey) {
-        throw new Error("API key is required");
-      }
-
-      if (!baseUrl) {
-        throw new Error("Base URL is required");
-      }
-
-      if (!model) {
-        throw new Error("Model is required");
-      }
 
       // Initialize translationService
       this.translationService = new TranslationService(apiKey, baseUrl, model);
@@ -115,6 +102,7 @@ class SrtTranslator {
           apiKey,
           baseUrl,
           maxBatchLength,
+          concurrentRequests,
         }
       );
 
@@ -251,14 +239,18 @@ function setupCli(): Command {
       "-l, --max-batch-length <length>",
       "Maximum character length per batch"
     )
+    .option(
+      "-c, --concurrent-requests <number>",
+      "Number of concurrent translation requests"
+    )
     .option("-v, --verbose", "Enable verbose logging")
     .action(async (input, rawOptions) => {
       const translator = new SrtTranslator(rawOptions.verbose);
       const processedOptions = processOptions(rawOptions);
       await translator.run({
+        ...processedOptions,
         input,
         output: rawOptions.output,
-        ...processedOptions,
       });
     });
 
@@ -285,6 +277,10 @@ function setupCli(): Command {
       "-l, --max-batch-length <length>",
       "Maximum character length per batch"
     )
+    .option(
+      "-c, --concurrent-requests <number>",
+      "Number of concurrent translation requests"
+    )
     .option("--parallel", "Process files in parallel")
     .option("-v, --verbose", "Enable verbose logging")
     .action(async (patterns, rawOptions) => {
@@ -303,8 +299,10 @@ function setupCli(): Command {
     `
 Examples:
   $ srt-translator translate movie.srt -t Chinese          # Translate movie.srt to Chinese
+  $ srt-translator translate movie.srt -t Chinese -c 3     # Translate with 3 concurrent requests
   $ srt-translator batch "**/*.srt" -t French              # Translate all SRT files to French
   $ srt-translator batch "movies/*.srt" -t German --parallel # Translate all SRTs in parallel
+  $ srt-translator batch "movies/*.srt" -t German -c 5     # Translate with 5 concurrent requests
 `
   );
 

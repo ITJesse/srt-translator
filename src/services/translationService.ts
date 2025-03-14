@@ -51,6 +51,7 @@ export class TranslationService {
       apiKey,
       baseUrl,
       maxBatchLength,
+      concurrentRequests,
     } = options;
 
     // 使用传入的模型
@@ -58,6 +59,7 @@ export class TranslationService {
 
     // 输出使用的模型信息
     console.log(`Using translation model: ${modelToUse}`);
+    console.log(`Concurrent requests: ${concurrentRequests}`);
 
     // Reinitialize OpenAI client if custom API key or baseUrl is provided
     if (apiKey || baseUrl) {
@@ -76,7 +78,38 @@ export class TranslationService {
 
     // Process texts in batches based on text length to avoid token limits
     const batches = this.createBatches(texts, maxBatchLength as number);
+    console.log(`Created ${batches.length} batches for translation`);
 
+    // 使用并行处理批次
+    if (concurrentRequests && concurrentRequests > 1) {
+      return await this.translateBatchesParallel(
+        batches,
+        systemPrompt,
+        modelToUse,
+        concurrentRequests
+      );
+    } else {
+      // 使用原有的顺序处理方式
+      return await this.translateBatchesSequential(
+        batches,
+        systemPrompt,
+        modelToUse
+      );
+    }
+  }
+
+  /**
+   * 顺序处理批次
+   * @param batches 批次数组
+   * @param systemPrompt 系统提示
+   * @param model 使用的模型
+   * @returns 翻译结果数组
+   */
+  private async translateBatchesSequential(
+    batches: string[][],
+    systemPrompt: string,
+    model: string
+  ): Promise<string[]> {
     const translatedBatches: string[][] = [];
 
     for (let i = 0; i < batches.length; i++) {
@@ -95,13 +128,85 @@ export class TranslationService {
       const translatedBatch = await this.translateBatch(
         batch,
         systemPrompt,
-        modelToUse
+        model
       );
       translatedBatches.push(translatedBatch);
     }
 
     // Flatten the batches back into a single array
     return translatedBatches.flat();
+  }
+
+  /**
+   * 并行处理批次
+   * @param batches 批次数组
+   * @param systemPrompt 系统提示
+   * @param model 使用的模型
+   * @param concurrentRequests 并行请求数量
+   * @returns 翻译结果数组
+   */
+  private async translateBatchesParallel(
+    batches: string[][],
+    systemPrompt: string,
+    model: string,
+    concurrentRequests: number
+  ): Promise<string[]> {
+    const results: string[][] = new Array(batches.length);
+    let currentBatchIndex = 0;
+
+    // 创建一个处理批次的函数
+    const processBatch = async (): Promise<void> => {
+      while (currentBatchIndex < batches.length) {
+        const batchIndex = currentBatchIndex++;
+        const batch = batches[batchIndex];
+
+        const batchItemCount = batch.length;
+        const batchTotalLength = batch.reduce(
+          (sum, text) => sum + text.length,
+          0
+        );
+        console.log(
+          `Translating batch ${batchIndex + 1}/${
+            batches.length
+          } (${batchItemCount} items, ${batchTotalLength} characters)...`
+        );
+
+        try {
+          const translatedBatch = await this.translateBatch(
+            batch,
+            systemPrompt,
+            model
+          );
+          results[batchIndex] = translatedBatch;
+        } catch (error) {
+          console.error(
+            `Error translating batch ${batchIndex + 1}: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+          // 重试失败的批次
+          currentBatchIndex--;
+        }
+      }
+    };
+
+    // 创建并发处理器
+    const processors: Promise<void>[] = [];
+    const actualConcurrency = Math.min(concurrentRequests, batches.length);
+
+    console.log(
+      `Starting ${actualConcurrency} concurrent translation processors`
+    );
+
+    for (let i = 0; i < actualConcurrency; i++) {
+      processors.push(processBatch());
+    }
+
+    // 等待所有处理器完成
+    await Promise.all(processors);
+
+    // 按原始顺序返回结果
+    return results.flat();
   }
 
   /**

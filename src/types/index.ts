@@ -19,17 +19,19 @@ export interface TranslationOptions {
   apiKey?: string;
   baseUrl?: string;
   maxBatchLength?: number;
+  concurrentRequests?: number;
 }
 
 // CLI options
 export interface CliOptions {
   input: string;
   output: string;
-  sourceLanguage?: string;
+  sourceLanguage: string;
   targetLanguage: string;
-  model?: string;
-  preserveFormatting?: boolean;
-  apiKey?: string;
-  baseUrl?: string;
-  maxBatchLength?: number;
-} 
+  model: string;
+  preserveFormatting: boolean;
+  apiKey: string;
+  baseUrl: string;
+  maxBatchLength: number;
+  concurrentRequests: number;
+}

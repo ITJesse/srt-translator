@@ -8,18 +8,31 @@ import { CliOptions } from '../types'
 export function processOptions(
   rawOptions: Record<string, any>
 ): Omit<CliOptions, "input" | "output"> {
+  if (!rawOptions.targetLanguage && !process.env.DEFAULT_TARGET_LANGUAGE) {
+    throw new Error("Target language is required");
+  }
+  if (!rawOptions.apiKey && !process.env.OPENAI_API_KEY) {
+    throw new Error("API key is required");
+  }
   return {
-    sourceLanguage: rawOptions.sourceLanguage,
-    targetLanguage: rawOptions.targetLanguage || "English",
+    sourceLanguage: rawOptions.sourceLanguage || "",
+    targetLanguage:
+      rawOptions.targetLanguage || process.env.DEFAULT_TARGET_LANGUAGE,
     model: rawOptions.model || process.env.DEFAULT_MODEL || "gpt-3.5-turbo",
     preserveFormatting:
       rawOptions.preserveFormatting !== undefined
         ? rawOptions.preserveFormatting
         : true,
-    apiKey: rawOptions.apiKey || process.env.OPENAI_API_KEY,
-    baseUrl: rawOptions.baseUrl || process.env.OPENAI_API_BASE_URL,
+    apiKey: rawOptions.apiKey || process.env.OPENAI_API_KEY || "",
+    baseUrl:
+      rawOptions.baseUrl ||
+      process.env.OPENAI_API_BASE_URL ||
+      "https://api.openai.com/v1",
     maxBatchLength: rawOptions.maxBatchLength
       ? parseInt(rawOptions.maxBatchLength, 10)
       : 2000,
+    concurrentRequests: rawOptions.concurrentRequests
+      ? parseInt(rawOptions.concurrentRequests, 10)
+      : 5,
   };
 }
