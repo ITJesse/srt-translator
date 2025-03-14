@@ -1,0 +1,53 @@
+// SRT Translator Project Rules
+
+// Code Style
+- 使用TypeScript编写所有代码
+- 使用ES6+语法特性
+- 使用2空格缩进
+- 使用单引号而非双引号
+- 每行代码不超过100个字符
+- 使用camelCase命名变量和函数
+- 使用PascalCase命名类和接口
+- 使用UPPER_SNAKE_CASE命名常量
+- 所有函数和方法必须有JSDoc注释
+- 所有文件末尾留一空行
+
+// Project Structure
+- 源代码放在src目录下
+- 测试代码放在tests目录下
+- 构建输出放在dist目录下
+- 使用模块化设计，按功能组织代码
+
+// Git Workflow
+- 使用feature分支开发新功能
+- 提交信息使用英文，格式为"feat/fix/docs/style/refactor/test/chore: 简短描述"
+- 合并前进行代码审查
+
+// Testing
+- 为所有核心功能编写单元测试
+- 测试覆盖率目标>80%
+
+// Documentation
+- README.md保持更新
+- 代码中的注释使用英文
+- 用户界面和日志信息使用英文
+
+// Dependencies
+- 尽量减少依赖数量
+- 定期更新依赖版本
+- 使用yarn作为包管理器
+
+// Error Handling
+- 所有异步操作必须有适当的错误处理
+- 用户友好的错误信息
+- 记录详细的错误日志
+
+// Security
+- 不在代码中硬编码API密钥
+- 使用环境变量存储敏感信息
+- 验证所有用户输入
+
+// Performance
+- 优化大文件处理
+- 实现批处理以处理大型字幕文件
+- 考虑内存使用和执行时间 

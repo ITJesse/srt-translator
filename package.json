@@ -1,0 +1,36 @@
+{
+  "name": "srt-translator",
+  "version": "1.0.0",
+  "description": "A tool to translate SRT subtitles using AI",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "packageManager": "yarn@4.6.0",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "prepublishOnly": "yarn build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.2"
+  },
+  "dependencies": {
+    "commander": "^13.1.0",
+    "dotenv": "^16.4.7",
+    "glob": "^11.0.1",
+    "openai": "^4.87.3",
+    "subtitle": "^4.2.2-alpha.0"
+  },
+  "bin": "./dist/index.js",
+  "keywords": [
+    "srt",
+    "subtitle",
+    "translation",
+    "ai",
+    "openai"
+  ],
+  "author": "",
+  "license": "MIT"
+}
