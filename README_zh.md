@@ -8,6 +8,7 @@
 - 保留原始格式和时间轴
 - 支持各种OpenAI模型（默认使用gpt-4o）
 - 自动提取和应用专业术语表，确保翻译一致性
+- 支持导出和导入术语表，便于在不同翻译项目间复用
 - 批处理以处理大型字幕文件
 - 命令行界面，便于集成
 
@@ -74,9 +75,13 @@ node dist/index.js path/to/subtitles.srt
   -m, --model <name>         AI模型名称 (默认: "gpt-4o")
   -l, --max-length <number>  每批次的最大字符数 (默认: 2000)
   -c, --concurrency <number> 并发处理的批次数 (默认: 10)
+  --glossary-in <file>       输入术语表JSON文件路径
+  --glossary-out <file>      输出术语表JSON文件路径
   -V, --version              输出版本号
   -h, --help                 显示帮助信息
 ```
+
+注意：`--glossary-in` 和 `--glossary-out` 选项不能同时使用。
 
 ### 示例
 
@@ -110,9 +115,26 @@ node dist/index.js subtitles.srt -t japanese -o translated_japanese.srt
 node dist/index.js subtitles.srt -l 1500 -c 5
 ```
 
-### 术语表自动提取
+导出术语表（不执行翻译）:
 
-工具会自动分析字幕文件，提取专业术语和特定词汇，确保翻译的一致性。这对于包含技术术语、专有名词或重复出现的特定表达的字幕特别有用。
+```bash
+node dist/index.js subtitles.srt --glossary-out glossary.json
+```
+
+使用已有术语表进行翻译:
+
+```bash
+node dist/index.js subtitles.srt --glossary-in glossary.json
+```
+
+### 术语表管理
+
+工具支持以JSON格式导出和导入术语表：
+
+- **导出**：使用 `--glossary-out` 从字幕文件中提取并保存术语表，此操作不会执行翻译
+- **导入**：使用 `--glossary-in` 在翻译过程中应用之前提取的术语表
+
+此功能允许您在多个字幕文件或翻译项目之间保持术语一致性。
 
 ## 开发
 

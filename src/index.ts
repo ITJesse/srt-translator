@@ -21,6 +21,8 @@ export interface TranslationConfig {
   concurrency: number
   apiKey: string
   apiBaseUrl?: string
+  glossaryInputFile?: string
+  glossaryOutputFile?: string
 }
 
 const DEFAULT_MAX_LENGTH = 2000
@@ -47,8 +49,19 @@ const getVersion = (): string => {
  * @param config 翻译配置对象
  */
 const processSubtitles = async (config: TranslationConfig): Promise<void> => {
-  const { inputFile, outputFile, sourceLanguage, targetLanguage, model, maxLength, concurrency, apiKey, apiBaseUrl } =
-    config
+  const {
+    inputFile,
+    outputFile,
+    sourceLanguage,
+    targetLanguage,
+    model,
+    maxLength,
+    concurrency,
+    apiKey,
+    apiBaseUrl,
+    glossaryInputFile,
+    glossaryOutputFile,
+  } = config
 
   try {
     if (!fs.existsSync(inputFile)) {
@@ -81,33 +94,64 @@ const processSubtitles = async (config: TranslationConfig): Promise<void> => {
     }
     console.log(`Total ${batches.length} batches to process`)
 
-    console.log('Extracting glossary...')
-
-    let progress = new cliProgress.SingleBar({
-      format: 'Extracting glossary: {bar} | {percentage}% | {value}/{total} | ETA: {eta}s',
-    })
-    progress.start(batches.length, 0)
-
     // 创建翻译器实例
     const translator = new Translator(model, apiKey, apiBaseUrl)
 
+    // 初始化术语表
     let glossary: Record<string, string> = {}
-    for (let i = 0; i < batches.length; i += concurrency) {
-      const batchPromises = batches.slice(i, i + concurrency).map(async (batch) => {
-        const result = await translator.extractGlossary({
-          subtitles: batch,
-          sourceLanguage,
-          targetLanguage,
-        })
-        glossary = { ...glossary, ...result }
-        progress.increment()
-      })
-      await Promise.all(batchPromises)
-    }
-    progress.stop()
-    console.log('Glossary extraction completed')
 
-    progress = new cliProgress.SingleBar({
+    // 如果提供了术语表输入文件，则从文件加载术语表
+    if (glossaryInputFile) {
+      try {
+        console.log(`Loading glossary from ${glossaryInputFile}...`)
+        const glossaryContent = fs.readFileSync(glossaryInputFile, 'utf8')
+        glossary = JSON.parse(glossaryContent)
+        console.log(`Loaded ${Object.keys(glossary).length} glossary terms`)
+      } catch (error) {
+        console.error(`Error loading glossary file: ${error}`)
+        process.exit(1)
+      }
+    } else {
+      // 否则提取术语表
+      console.log('Extracting glossary...')
+
+      let progress = new cliProgress.SingleBar({
+        format: 'Extracting glossary: {bar} | {percentage}% | {value}/{total} | ETA: {eta}s',
+      })
+      progress.start(batches.length, 0)
+
+      for (let i = 0; i < batches.length; i += concurrency) {
+        const batchPromises = batches.slice(i, i + concurrency).map(async (batch) => {
+          const result = await translator.extractGlossary({
+            subtitles: batch,
+            sourceLanguage,
+            targetLanguage,
+          })
+          glossary = { ...glossary, ...result }
+          progress.increment()
+        })
+        await Promise.all(batchPromises)
+      }
+      progress.stop()
+      console.log('Glossary extraction completed')
+
+      // 如果提供了术语表输出文件，则保存术语表
+      if (glossaryOutputFile) {
+        try {
+          console.log(`Saving glossary to ${glossaryOutputFile}...`)
+          fs.writeFileSync(glossaryOutputFile, JSON.stringify(glossary, null, 2))
+          console.log(`Glossary saved with ${Object.keys(glossary).length} terms`)
+
+          // 如果指定了glossaryOutputFile，则只进行术语表导出操作
+          console.log('Only glossary extraction was requested. Skipping translation.')
+          return
+        } catch (error) {
+          console.error(`Error saving glossary file: ${error}`)
+        }
+      }
+    }
+
+    let progress = new cliProgress.SingleBar({
       format: 'Translation: {bar} | {percentage}% | {value}/{total} | ETA: {eta}s',
     })
     progress.start(batches.length, 0)
@@ -171,6 +215,8 @@ program
     '-b, --api-base-url <url>',
     'OpenAI API base URL (can also be set via OPENAI_API_BASE_URL environment variable)',
   )
+  .option('--glossary-in <file>', 'Path to input glossary JSON file')
+  .option('--glossary-out <file>', 'Path to output glossary JSON file')
   .option('--no-progress', 'Disable progress bar display')
   .action(async (inputFile, options) => {
     const sourceLanguage = options.source || DEFAULT_SOURCE_LANGUAGE
@@ -180,6 +226,14 @@ program
     const concurrency = parseInt(options.concurrency, 10)
     let apiKey = options.apiKey
     const apiBaseUrl = options.apiBaseUrl
+    const glossaryInputFile = options.glossaryIn
+    const glossaryOutputFile = options.glossaryOut
+
+    // 检查两个术语表参数是否同时指定
+    if (glossaryInputFile && glossaryOutputFile) {
+      console.error('Error: --glossary-in and --glossary-out options cannot be used together.')
+      process.exit(1)
+    }
 
     if (!apiKey) {
       const envApiKey = process.env.OPENAI_API_KEY
@@ -218,6 +272,12 @@ program
     if (finalApiBaseUrl) {
       console.log(`API base URL: ${finalApiBaseUrl}`)
     }
+    if (glossaryInputFile) {
+      console.log(`Glossary input file: ${glossaryInputFile}`)
+    }
+    if (glossaryOutputFile) {
+      console.log(`Glossary output file: ${glossaryOutputFile}`)
+    }
     console.log('----------------------------')
 
     const config: TranslationConfig = {
@@ -230,6 +290,8 @@ program
       concurrency,
       apiKey,
       apiBaseUrl: finalApiBaseUrl,
+      glossaryInputFile,
+      glossaryOutputFile,
     }
 
     await processSubtitles(config)

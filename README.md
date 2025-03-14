@@ -10,6 +10,7 @@ A command-line tool for translating SRT subtitle files using AI.
 - Preserve original formatting and timecodes
 - Support for various OpenAI models (default: gpt-4o)
 - Automatic extraction and application of terminology glossaries for consistent translations
+- Export and import terminology glossaries for reuse between translation projects
 - Batch processing to handle large subtitle files
 - Command-line interface for easy integration
 
@@ -76,9 +77,13 @@ Options:
   -m, --model <name>         AI model name (default: "gpt-4o")
   -l, --max-length <number>  Maximum characters per batch (default: 2000)
   -c, --concurrency <number> Number of batches to process concurrently (default: 10)
+  --glossary-in <file>       Path to input glossary JSON file
+  --glossary-out <file>      Path to output glossary JSON file
   -V, --version              Output the version number
   -h, --help                 Display help information
 ```
+
+Note: `--glossary-in` and `--glossary-out` options cannot be used together.
 
 ### Examples
 
@@ -112,9 +117,30 @@ Adjust batch size and concurrency:
 node dist/index.js subtitles.srt -l 1500 -c 5
 ```
 
+Export terminology glossary without translation:
+
+```bash
+node dist/index.js subtitles.srt --glossary-out glossary.json
+```
+
+Use existing terminology glossary for translation:
+
+```bash
+node dist/index.js subtitles.srt --glossary-in glossary.json
+```
+
 ### Automatic Terminology Extraction
 
 The tool automatically analyzes the subtitle file, extracts technical terms and specific vocabulary, and ensures translation consistency. This is especially useful for subtitles containing technical terms, proper nouns, or specific expressions that appear repeatedly.
+
+### Terminology Glossary Management
+
+The tool supports exporting and importing terminology glossaries in JSON format:
+
+- **Export**: Use `--glossary-out` to extract and save terminology from a subtitle file without performing translation
+- **Import**: Use `--glossary-in` to apply a previously extracted terminology glossary during translation
+
+This feature allows you to maintain terminology consistency across multiple subtitle files or translation projects.
 
 ## Development
 
