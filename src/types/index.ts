@@ -12,14 +12,14 @@ export interface TranslatedSubtitleItem extends SubtitleItem {
 
 // Translation service types
 export interface TranslationOptions {
-  sourceLanguage?: string
+  sourceLanguage: string
   targetLanguage: string
-  model?: string
-  apiKey?: string
-  baseUrl?: string
-  maxBatchLength?: number
-  concurrentRequests?: number
-  terminology?: boolean
+  model: string
+  apiKey: string
+  baseUrl: string
+  maxBatchLength: number
+  concurrentRequests: number
+  terminology: boolean
 }
 
 // 术语表接口
