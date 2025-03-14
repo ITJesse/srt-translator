@@ -95,8 +95,7 @@ class SrtTranslator {
         concurrentRequests,
         enableCache,
         cacheDir,
-        extractTerms,
-        useTerminology,
+        terminology,
       } = options;
 
       // Initialize translationService (先初始化服务，再输出信息)
@@ -168,8 +167,7 @@ class SrtTranslator {
         baseUrl,
         maxBatchLength,
         concurrentRequests,
-        extractTerms,
-        useTerminology,
+        terminology,
       };
 
       const translatedTexts = await this.translationService.translateTexts(
@@ -207,23 +205,23 @@ class SrtTranslator {
       this.stopProgressBar();
 
       // 如果启用了术语提取，显示术语表信息
-      if (extractTerms) {
-        const terminology = this.translationService.getTerminology();
-        if (terminology.length > 0) {
+      if (terminology) {
+        const terminologyInfo = this.translationService.getTerminology();
+        if (terminologyInfo.length > 0) {
           console.log(
-            `\nExtracted and translated ${terminology.length} terms for consistent translation:`
+            `\nExtracted and translated ${terminologyInfo.length} terms for consistent translation:`
           );
           console.log("Original | Translation");
           console.log("-------- | -----------");
           // 只显示前10个术语，避免输出过多
-          const displayCount = Math.min(terminology.length, 10);
+          const displayCount = Math.min(terminologyInfo.length, 10);
           for (let i = 0; i < displayCount; i++) {
             console.log(
-              `${terminology[i].original} | ${terminology[i].translated}`
+              `${terminologyInfo[i].original} | ${terminologyInfo[i].translated}`
             );
           }
-          if (terminology.length > 10) {
-            console.log(`... and ${terminology.length - 10} more terms`);
+          if (terminologyInfo.length > 10) {
+            console.log(`... and ${terminologyInfo.length - 10} more terms`);
           }
         } else {
           console.log(
@@ -311,23 +309,23 @@ class SrtTranslator {
       );
 
       // 如果启用了术语提取，显示术语表信息
-      if (options.extractTerms) {
-        const terminology = this.translationService.getTerminology();
-        if (terminology.length > 0) {
+      if (options.terminology) {
+        const terminologyInfo = this.translationService.getTerminology();
+        if (terminologyInfo.length > 0) {
           console.log(
-            `\nExtracted and translated ${terminology.length} terms for consistent translation:`
+            `\nExtracted and translated ${terminologyInfo.length} terms for consistent translation:`
           );
           console.log("Original | Translation");
           console.log("-------- | -----------");
           // 只显示前10个术语，避免输出过多
-          const displayCount = Math.min(terminology.length, 10);
+          const displayCount = Math.min(terminologyInfo.length, 10);
           for (let i = 0; i < displayCount; i++) {
             console.log(
-              `${terminology[i].original} | ${terminology[i].translated}`
+              `${terminologyInfo[i].original} | ${terminologyInfo[i].translated}`
             );
           }
-          if (terminology.length > 10) {
-            console.log(`... and ${terminology.length - 10} more terms`);
+          if (terminologyInfo.length > 10) {
+            console.log(`... and ${terminologyInfo.length - 10} more terms`);
           }
         } else {
           console.log(
@@ -389,12 +387,8 @@ function setupCli(): Command {
     .option("--no-cache", "Disable translation caching")
     .option("--cache-dir <path>", "Directory to store translation cache")
     .option(
-      "--extract-terms",
-      "Extract and translate terms and names for consistent translation"
-    )
-    .option(
-      "--use-terminology",
-      "Use terminology table (only effective when extract-terms is enabled)"
+      "--terminology",
+      "Enable terminology extraction and usage for consistent translation"
     )
     .option("-v, --verbose", "Enable verbose logging")
     .action(async (input, rawOptions) => {
@@ -437,12 +431,8 @@ function setupCli(): Command {
     .option("--no-cache", "Disable translation caching")
     .option("--cache-dir <path>", "Directory to store translation cache")
     .option(
-      "--extract-terms",
-      "Extract and translate terms and names for consistent translation"
-    )
-    .option(
-      "--use-terminology",
-      "Use terminology table (only effective when extract-terms is enabled)"
+      "--terminology",
+      "Enable terminology extraction and usage for consistent translation"
     )
     .option("-v, --verbose", "Enable verbose logging")
     .action(async (patterns, rawOptions) => {
@@ -460,10 +450,10 @@ Examples:
   $ srt-translator translate movie.srt -t Chinese -c 3     # Translate with 3 concurrent requests
   $ srt-translator translate movie.srt -t Chinese --no-cache # Translate without using cache
   $ srt-translator translate movie.srt -t Chinese --cache-dir ./my-cache # Use custom cache directory
-  $ srt-translator translate movie.srt -t Chinese --extract-terms # Extract and translate terms for consistency
+  $ srt-translator translate movie.srt -t Chinese --terminology # Use terminology for consistency
   $ srt-translator batch "**/*.srt" -t French              # Translate all SRT files to French
   $ srt-translator batch "movies/*.srt" -t German -c 5     # Translate with 5 concurrent requests
-  $ srt-translator batch "movies/*.srt" -t German --extract-terms # Extract terms for consistent translation
+  $ srt-translator batch "movies/*.srt" -t German --terminology # Use terminology for consistency
 `
   );
 

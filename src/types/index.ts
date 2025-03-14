@@ -22,8 +22,7 @@ export interface TranslationOptions {
   concurrentRequests?: number;
   enableCache?: boolean;
   cacheDir?: string;
-  extractTerms?: boolean;
-  useTerminology?: boolean;
+  terminology?: boolean;
 }
 
 // 术语表接口
@@ -46,6 +45,5 @@ export interface CliOptions {
   concurrentRequests: number;
   enableCache: boolean;
   cacheDir: string;
-  extractTerms: boolean;
-  useTerminology: boolean;
+  terminology: boolean;
 }

@@ -68,8 +68,7 @@ export class TranslationService {
       concurrentRequests,
       enableCache,
       cacheDir,
-      extractTerms,
-      useTerminology,
+      terminology,
     } = options;
 
     // 使用传入的模型
@@ -143,8 +142,8 @@ export class TranslationService {
     // 存储批次信息而不是直接输出
     this.lastBatchesCount = batches.length;
 
-    // 如果启用了术语提取，先提取并翻译术语
-    if (extractTerms) {
+    // 如果启用了术语功能，先提取并翻译术语
+    if (terminology) {
       await this.extractAndTranslateTerms(
         batches,
         sourceLanguage,
@@ -159,7 +158,7 @@ export class TranslationService {
       targetLanguage,
       preserveFormatting === undefined ? true : preserveFormatting,
       sourceLanguage,
-      useTerminology ? this.terminology : undefined
+      terminology ? this.terminology : undefined
     );
 
     // 翻译未缓存的文本
