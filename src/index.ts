@@ -2,7 +2,6 @@
 
 import { Command } from 'commander'
 import * as dotenv from 'dotenv'
-import { glob } from 'glob'
 import * as path from 'path'
 
 import { SrtService } from './services/srtService'
@@ -161,94 +160,6 @@ class SrtTranslator {
       process.exit(1)
     }
   }
-
-  /**
-   * Process multiple files in batch
-   * @param patterns Glob patterns for input files
-   * @param options CLI options
-   */
-  public async batchProcess(patterns: string[], options: Omit<CliOptions, 'input' | 'output'>): Promise<void> {
-    try {
-      // Find all matching files
-      console.log('Searching for matching subtitle files...')
-
-      const inputFiles: string[] = []
-      for (const pattern of patterns) {
-        // Use the modern async glob API
-        const matches = await glob(pattern)
-        inputFiles.push(...matches.filter((file) => FileUtils.isSrtFile(file)))
-      }
-
-      if (inputFiles.length === 0) {
-        throw new Error('No SRT files found matching the provided patterns')
-      }
-
-      console.log(`Found ${inputFiles.length} SRT files to process`)
-
-      // 初始化翻译服务
-      this.translationService = new TranslationService(
-        options.apiKey,
-        options.baseUrl,
-        options.model,
-        options.enableCache,
-        options.cacheDir,
-      )
-
-      // 如果启用了术语功能，显示相关信息
-      if (options.terminology) {
-        console.log(`Terminology extraction: enabled (将先提取术语，再进行翻译)`)
-      }
-
-      console.log('Processing files in parallel...')
-      let processedCount = 0
-
-      // Process files in parallel
-      await Promise.all(
-        inputFiles.map((input) =>
-          this.run({
-            ...options,
-            input,
-            output: FileUtils.generateOutputPath(input, options.targetLanguage),
-          })
-            .then(() => {
-              processedCount++
-              console.log(`Processed ${processedCount}/${inputFiles.length} files`)
-            })
-            .catch((error: unknown) => {
-              console.error(`Error processing ${input}: ${error instanceof Error ? error.message : String(error)}`)
-              processedCount++
-              console.log(`Processed ${processedCount}/${inputFiles.length} files`)
-            }),
-        ),
-      )
-
-      // 输出批处理完成信息
-      console.log(`\n批处理已完成: ${processedCount} 个文件翻译成功。`)
-
-      // 如果启用了术语提取，显示术语表信息
-      if (options.terminology) {
-        const terminologyInfo = this.translationService.getTerminology()
-        if (terminologyInfo.length > 0) {
-          console.log(`\n术语提取与翻译总结：已提取并翻译 ${terminologyInfo.length} 个术语，并在翻译过程中保持一致性`)
-          console.log('原文术语 | 翻译')
-          console.log('-------- | -----------')
-          // 只显示前10个术语，避免输出过多
-          const displayCount = Math.min(terminologyInfo.length, 10)
-          for (let i = 0; i < displayCount; i++) {
-            console.log(`${terminologyInfo[i].original} | ${terminologyInfo[i].translated}`)
-          }
-          if (terminologyInfo.length > 10) {
-            console.log(`... 以及其他 ${terminologyInfo.length - 10} 个术语`)
-          }
-        } else {
-          console.log('\n术语提取结果：未从内容中提取到重要术语。')
-        }
-      }
-    } catch (error) {
-      console.error(`Error: ${error instanceof Error ? error.message : String(error)}`)
-      process.exit(1)
-    }
-  }
 }
 
 /**
@@ -285,27 +196,6 @@ function setupCli(): Command {
       })
     })
 
-  // Batch processing command
-  program
-    .command('batch <patterns...>')
-    .description('Translate multiple SRT files using glob patterns')
-    .option('-s, --source-language <language>', 'Source language (auto-detect if not specified)')
-    .option('-t, --target-language <language>', 'Target language')
-    .option('-m, --model <model>', 'OpenAI model to use')
-    .option('-k, --api-key <key>', 'OpenAI API key (overrides OPENAI_API_KEY environment variable)')
-    .option('-b, --base-url <url>', 'OpenAI API base URL (overrides OPENAI_API_BASE_URL environment variable)')
-    .option('-l, --max-batch-length <length>', 'Maximum character length per batch')
-    .option('-c, --concurrent-requests <number>', 'Number of concurrent translation requests')
-    .option('--no-cache', 'Disable translation caching')
-    .option('--cache-dir <path>', 'Directory to store translation cache')
-    .option('--terminology', 'Enable terminology extraction and usage for consistent translation')
-    .option('-v, --verbose', 'Enable verbose logging')
-    .action(async (patterns, rawOptions) => {
-      const translator = new SrtTranslator(rawOptions.verbose)
-      const processedOptions = processOptions(rawOptions)
-      await translator.batchProcess(patterns, processedOptions)
-    })
-
   // Add examples to help text
   program.addHelpText(
     'after',
@@ -316,9 +206,6 @@ Examples:
   $ srt-translator translate movie.srt -t Chinese --no-cache # Translate without using cache
   $ srt-translator translate movie.srt -t Chinese --cache-dir ./my-cache # Use custom cache directory
   $ srt-translator translate movie.srt -t Chinese --terminology # Use terminology for consistency
-  $ srt-translator batch "**/*.srt" -t French              # Translate all SRT files to French
-  $ srt-translator batch "movies/*.srt" -t German -c 5     # Translate with 5 concurrent requests
-  $ srt-translator batch "movies/*.srt" -t German --terminology # Use terminology for consistency
 `,
   )
 

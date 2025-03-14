@@ -15,35 +15,31 @@ export class SrtService {
    */
   public async parseSrtFile(filePath: string): Promise<SubtitleItem[]> {
     try {
-      const absolutePath = path.resolve(filePath);
-      const fileContent = await fs.promises.readFile(absolutePath, "utf-8");
+      const absolutePath = path.resolve(filePath)
+      const fileContent = await fs.promises.readFile(absolutePath, 'utf-8')
 
       // 使用parseSync方法同步解析SRT内容
-      const nodes = parseSync(fileContent);
+      const nodes = parseSync(fileContent)
 
-      const subtitles: SubtitleItem[] = [];
-      let index = 1;
+      const subtitles: SubtitleItem[] = []
+      let index = 1
 
       // 处理解析后的节点
       for (const node of nodes) {
-        if (node.type === "cue") {
+        if (node.type === 'cue') {
           subtitles.push({
             id: index++,
             start: node.data.start,
             end: node.data.end,
-            text: node.data.text || "",
-          });
+            text: node.data.text || '',
+          })
         }
       }
 
-      return subtitles;
+      return subtitles
     } catch (error) {
-      console.error(
-        `Error parsing SRT file: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-      throw error;
+      console.error(`Error parsing SRT file: ${error instanceof Error ? error.message : String(error)}`)
+      throw error
     }
   }
 
@@ -53,36 +49,29 @@ export class SrtService {
    * @param outputPath Path to save the translated SRT file
    * @returns The absolute path of the saved file
    */
-  public async writeSrtFile(
-    subtitles: TranslatedSubtitleItem[],
-    outputPath: string
-  ): Promise<string> {
+  public async writeSrtFile(subtitles: TranslatedSubtitleItem[], outputPath: string): Promise<string> {
     try {
       const srtContent = subtitles.map((subtitle) => {
         return {
-          type: "cue" as const,
+          type: 'cue' as const,
           data: {
             start: subtitle.start,
             end: subtitle.end,
             text: subtitle.text,
           },
-        };
-      });
+        }
+      })
 
       // 使用stringifySync方法生成SRT内容
-      const output = stringifySync(srtContent, { format: "SRT" });
+      const output = stringifySync(srtContent, { format: 'SRT' })
 
-      const absolutePath = path.resolve(outputPath);
-      await fs.promises.writeFile(absolutePath, output, "utf-8");
+      const absolutePath = path.resolve(outputPath)
+      await fs.promises.writeFile(absolutePath, output, 'utf-8')
       // 不直接输出，而是返回保存的路径
-      return absolutePath;
+      return absolutePath
     } catch (error) {
-      console.error(
-        `Error writing SRT file: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-      throw error;
+      console.error(`Error writing SRT file: ${error instanceof Error ? error.message : String(error)}`)
+      throw error
     }
   }
 
@@ -92,7 +81,7 @@ export class SrtService {
    * @returns Array of text strings
    */
   public extractTextForTranslation(subtitles: SubtitleItem[]): string[] {
-    return subtitles.map((subtitle) => subtitle.text);
+    return subtitles.map((subtitle) => subtitle.text)
   }
 
   /**
@@ -103,18 +92,16 @@ export class SrtService {
    */
   public createTranslatedSubtitles(
     originalSubtitles: SubtitleItem[],
-    translatedTexts: string[]
+    translatedTexts: string[],
   ): TranslatedSubtitleItem[] {
     if (originalSubtitles.length !== translatedTexts.length) {
-      throw new Error(
-        "Number of original subtitles and translated texts do not match"
-      );
+      throw new Error('Number of original subtitles and translated texts do not match')
     }
 
     return originalSubtitles.map((subtitle, index) => ({
       ...subtitle,
       originalText: subtitle.text,
       text: translatedTexts[index],
-    }));
+    }))
   }
 }

@@ -1,3 +1,4 @@
+import { EventEmitter } from 'events'
 import OpenAI from 'openai'
 
 import { TerminologyEntry, TranslationOptions } from '../types'
@@ -5,8 +6,25 @@ import { CacheService } from './cacheService'
 
 /**
  * Service for handling translations using OpenAI API
+ *
+ * 事件:
+ * - 'progress': 当翻译进度更新时触发，参数为进度信息对象 {
+ *   completedBatches: number - 已完成的批次数
+ *   totalBatches: number - 总批次数
+ *   completedPercent: number - 完成百分比 (0-100)
+ *   translatedTexts: number - 已翻译文本数量估计
+ *   totalTexts: number - 总文本数量
+ *   cacheHits: number - 缓存命中数
+ * }
+ *
+ * 示例:
+ * ```
+ * translationService.on('progress', (progressInfo) => {
+ *   console.log(`翻译进度: ${progressInfo.completedPercent}%`);
+ * });
+ * ```
  */
-export class TranslationService {
+export class TranslationService extends EventEmitter {
   private openai: OpenAI
   private model: string
   private cacheService: CacheService
@@ -14,6 +32,9 @@ export class TranslationService {
   private lastTotalTexts: number = 0
   private lastBatchesCount: number = 0
   private terminology: TerminologyEntry[] = [] // 术语表
+  private completedBatches: number = 0 // 已完成的批次数
+  private totalBatches: number = 0 // 总批次数
+  private progressUpdateInterval: NodeJS.Timeout | null = null // 进度更新定时器
 
   /**
    * Initialize the translation service
@@ -24,6 +45,8 @@ export class TranslationService {
    * @param cacheDir Cache directory (default: ~/.srt-translator/cache)
    */
   constructor(apiKey: string, baseUrl: string, model: string, enableCache: boolean = true, cacheDir?: string) {
+    super() // 初始化EventEmitter
+
     if (!apiKey) {
       throw new Error('API key is required')
     }
@@ -84,27 +107,34 @@ export class TranslationService {
     this.lastTotalTexts = texts.length
     this.lastCacheHits = 0 // 将在处理API缓存时更新
 
-    // 如果启用了术语功能，先提取并翻译术语
+    // 重置进度跟踪
+    this.completedBatches = 0
+    this.totalBatches = batches.length
+
+    // 开始进度更新
+    this.startProgressTracking()
+
+    // 第一步：如果启用了术语功能，先批量处理所有batches中的术语
     if (terminology) {
-      console.log('正在提取并翻译术语...')
+      console.log('\n第一步：正在从所有批次中提取并翻译术语...')
       await this.extractAndTranslateTermsInOneStep(batches, sourceLanguage, targetLanguage, modelToUse)
 
       // 如果成功提取到术语，显示提取到的术语数量
       if (this.terminology.length > 0) {
-        console.log(`已提取并翻译 ${this.terminology.length} 个术语，将在翻译中保持一致性`)
+        console.log(`\n成功提取并翻译 ${this.terminology.length} 个术语，这些术语将在所有批次的翻译中保持一致性`)
       } else {
-        console.log('未从内容中提取到重要术语')
+        console.log('\n未从内容中提取到重要术语，将继续进行正常翻译')
       }
     }
 
-    // Prepare the system prompt
+    // 第二步：准备翻译所有批次时使用的系统提示（包含已提取的术语）
     const systemPrompt = this.createSystemPrompt(
       targetLanguage,
       sourceLanguage,
       terminology ? this.terminology : undefined,
     )
 
-    // 翻译批次
+    // 第三步：翻译所有批次
     let cacheHits = 0
 
     // 使用并行处理批次
@@ -112,7 +142,9 @@ export class TranslationService {
 
     // 如果启用了术语功能，在开始翻译前显示提示
     if (terminology && this.terminology.length > 0) {
-      console.log('开始使用提取的术语表进行翻译...')
+      console.log('第三步：开始使用提取的术语表进行批次翻译...')
+    } else {
+      console.log('第二步：开始翻译批次...')
     }
 
     // 实现并发控制的批次处理
@@ -149,6 +181,7 @@ export class TranslationService {
           if (content) {
             try {
               const translations = this.processResponseContent(content, batch)
+              this.updateProgress() // 更新进度
               return { index: batchIndex, translations }
             } catch (error) {
               console.error(`Error processing cached response: ${error}`)
@@ -160,9 +193,11 @@ export class TranslationService {
         // 如果没有缓存或缓存处理失败，翻译批次
         try {
           const translations = await this.translateBatch(batch, systemPrompt, modelToUse)
+          this.updateProgress() // 更新进度
           return { index: batchIndex, translations }
         } catch (error) {
           console.error(`Error translating batch ${batchIndex}: ${error}`)
+          this.updateProgress() // 即使失败也更新进度
           // 返回空结果，避免整个过程失败
           return { index: batchIndex, translations: batch.map(() => '') }
         }
@@ -172,6 +207,13 @@ export class TranslationService {
       const groupResults = await Promise.all(groupPromises)
       results.push(...groupResults)
     }
+
+    // 停止进度更新
+    this.stopProgressTracking()
+
+    // 打印最终进度（100%）
+    this.printProgress(this.totalBatches, this.totalBatches)
+    console.log('\n翻译完成！')
 
     // 按原始批次顺序整理结果
     results.sort((a, b) => a.index - b.index)
@@ -199,7 +241,7 @@ export class TranslationService {
     // 清空现有术语表
     this.terminology = []
 
-    // 合并所有批次文本用于术语提取
+    // 合并所有批次文本用于术语提取，确保不遗漏任何可能的术语
     const allTexts = batches.flat().join('\n')
 
     // 创建术语提取和翻译的系统提示
@@ -227,9 +269,18 @@ IMPORTANT: Your response MUST follow this exact JSON format:
   ]
 }
 
+CRITICAL REQUIREMENTS:
+1. Each "original" term MUST have exactly one corresponding "translated" term
+2. Do not combine multiple terms into one entry
+3. Do not split a single term into multiple entries
+4. Each term should be meaningful and complete (not just partial words)
+5. Ensure all extracted terms actually appear in the source text
+
 Do not include any text outside of this JSON structure. The response must be valid parseable JSON.`
 
     try {
+      console.log(`正在处理包含 ${batches.length} 个批次、共 ${this.lastTotalTexts} 条字幕文本的术语...`)
+
       // 创建请求选项
       const requestOptions: any = {
         model,
@@ -237,7 +288,7 @@ Do not include any text outside of this JSON structure. The response must be val
           { role: 'system', content: extractAndTranslatePrompt },
           {
             role: 'user',
-            content: `Extract and translate important terms from the following subtitle text:\n\n${allTexts}\n\nRespond only with a valid JSON object containing the terminology array.`,
+            content: `Extract and translate important terms from the following subtitle text:\n\n${allTexts}\n\nCRITICAL: Respond ONLY with a valid JSON object containing the terminology array. Each term in the source language MUST have exactly ONE corresponding translation. Make sure your JSON is valid and follows the required format exactly:\n{\n  "terminology": [\n    {"original": "term1", "translated": "translation1"},\n    {"original": "term2", "translated": "translation2"}\n  ]\n}`,
           },
         ],
         temperature: 0.3,
@@ -248,6 +299,7 @@ Do not include any text outside of this JSON structure. The response must be val
       const cachedResponse = this.cacheService.getApiResponse(requestOptions)
       if (cachedResponse) {
         // 如果有缓存的API响应，直接使用
+        console.log('使用缓存的术语提取结果')
         const content = cachedResponse.choices[0]?.message.content
         if (content) {
           this.processTerminologyResponse(content)
@@ -256,6 +308,7 @@ Do not include any text outside of this JSON structure. The response must be val
       }
 
       // 如果没有缓存或缓存处理失败，发送API请求
+      console.log('发送API请求提取术语...')
       const response = await this.openai.chat.completions.create(requestOptions)
 
       // 缓存API响应
@@ -299,7 +352,7 @@ Do not include any text outside of this JSON structure. The response must be val
         this.terminology = parsedContent.terminology.filter(
           (entry: any) => entry && typeof entry === 'object' && entry.original && entry.translated,
         )
-        console.log(`成功提取 ${this.terminology.length} 个术语`)
+        console.log(`\n成功提取 ${this.terminology.length} 个术语`)
         return
       }
 
@@ -417,7 +470,7 @@ Do not include any text outside of this JSON structure. The response must be val
           { role: 'system', content: systemPrompt },
           {
             role: 'user',
-            content: `Translate the following subtitle texts (provided as JSON array):\n${batchJson}\n\nProvide the translated texts in a JSON object with a "translations" array in the same order. Example: { "translations": ["translated text 1", "translated text 2", ...] }`,
+            content: `Translate the following subtitle texts (provided as JSON array):\n${batchJson}\n\nCRITICAL: Your response MUST contain EXACTLY ${batch.length} translated texts. The "translations" array MUST have the SAME LENGTH as the input array (${batch.length} items).\n\nProvide the translated texts in a JSON object with a "translations" array in the same order. Example: { "translations": ["translated text 1", "translated text 2", ...] }`,
           },
         ],
         temperature: 0.3,
@@ -452,6 +505,12 @@ Do not include any text outside of this JSON structure. The response must be val
       return this.processResponseContent(content, batch)
     } catch (error) {
       console.error(`Translation error: ${error instanceof Error ? error.message : String(error)}`)
+
+      // 如果是由于翻译结果数量不匹配引起的错误，不再尝试继续处理
+      if (error instanceof Error && error.message.includes('翻译结果数量不匹配')) {
+        throw new Error(`批次翻译失败：${error.message}`)
+      }
+
       throw error
     }
   }
@@ -469,7 +528,24 @@ Do not include any text outside of this JSON structure. The response must be val
         expectedArrayKey: 'translations',
         alternativeArrayKeys: ['terms'],
         fallbackData: batch,
+        strictLengthCheck: true, // 启用严格长度检查
       })
+
+      // 增加验证：确保翻译结果数量与原始批次数量匹配
+      if (result.length !== batch.length) {
+        console.error('\n翻译结果数量不匹配！')
+        console.error(`期望数量: ${batch.length}, 实际数量: ${result.length}`)
+        console.error('原始批次:')
+        batch.forEach((text, index) => {
+          console.error(`[${index}]: ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}`)
+        })
+        console.error('翻译结果:')
+        result.forEach((text, index) => {
+          console.error(`[${index}]: ${text.substring(0, 50)}${text.length > 50 ? '...' : ''}`)
+        })
+
+        throw new Error(`翻译结果数量不匹配: 期望 ${batch.length} 条，实际 ${result.length} 条`)
+      }
 
       return result
     } catch (error) {
@@ -486,8 +562,9 @@ Do not include any text outside of this JSON structure. The response must be val
    * @param options.expectedArrayKey 预期的数组键名（如'translations'或'terms'）
    * @param options.alternativeArrayKeys 替代的数组键名数组，当预期键不存在时尝试
    * @param options.fallbackData 当无法解析响应时使用的回退数据
+   * @param options.strictLengthCheck 是否启用严格长度检查，如果为true则在数量不匹配时抛出错误
    * @returns 处理后的数据数组
-   * @throws 如果无法解析JSON且无法使用回退策略时抛出错误
+   * @throws 如果无法解析JSON或启用严格长度检查且数量不匹配时抛出错误
    */
   private processAIResponse(
     content: string,
@@ -495,6 +572,7 @@ Do not include any text outside of this JSON structure. The response must be val
       expectedArrayKey: string
       alternativeArrayKeys: string[]
       fallbackData: any[]
+      strictLengthCheck?: boolean
     },
   ): any[] {
     // 清理内容，移除可能的 Markdown 代码块标记
@@ -510,6 +588,15 @@ Do not include any text outside of this JSON structure. The response must be val
       if (Array.isArray(options.fallbackData) && cleanedContent.includes('\n')) {
         // 假设每行对应一个结果
         const lines = cleanedContent.split('\n').filter((line) => line.trim())
+        // 检查长度是否匹配
+        if (options.strictLengthCheck && lines.length !== options.fallbackData.length) {
+          console.error('\n非JSON响应行数不匹配！')
+          console.error(`期望数量: ${options.fallbackData.length}, 实际数量: ${lines.length}`)
+          console.error('响应内容:')
+          console.error(cleanedContent)
+          throw new Error(`非JSON响应行数不匹配: 期望 ${options.fallbackData.length} 行，实际 ${lines.length} 行`)
+        }
+
         if (lines.length === options.fallbackData.length) {
           return lines
         }
@@ -521,39 +608,84 @@ Do not include any text outside of this JSON structure. The response must be val
 
     // 检查是否有预期的数组键
     if (parsedContent[options.expectedArrayKey] && Array.isArray(parsedContent[options.expectedArrayKey])) {
-      return parsedContent[options.expectedArrayKey]
+      const result = parsedContent[options.expectedArrayKey]
+      // 检查长度是否匹配
+      if (options.strictLengthCheck && result.length !== options.fallbackData.length) {
+        console.error(`\n键 "${options.expectedArrayKey}" 中的数组长度不匹配！`)
+        console.error(`期望数量: ${options.fallbackData.length}, 实际数量: ${result.length}`)
+        console.error('响应内容片段:')
+        console.error(JSON.stringify(parsedContent).substring(0, 200))
+        throw new Error(`翻译结果数量不匹配: 期望 ${options.fallbackData.length} 条，实际 ${result.length} 条`)
+      }
+      return result
     }
 
     // 检查替代数组键
     for (const key of options.alternativeArrayKeys) {
       if (parsedContent[key] && Array.isArray(parsedContent[key])) {
-        return parsedContent[key]
+        const result = parsedContent[key]
+        // 检查长度是否匹配
+        if (options.strictLengthCheck && result.length !== options.fallbackData.length) {
+          console.error(`\n替代键 "${key}" 中的数组长度不匹配！`)
+          console.error(`期望数量: ${options.fallbackData.length}, 实际数量: ${result.length}`)
+          throw new Error(`替代键翻译结果数量不匹配: 期望 ${options.fallbackData.length} 条，实际 ${result.length} 条`)
+        }
+        return result
       }
     }
 
     // 检查是否为数组本身（有些模型可能直接返回翻译数组而非嵌套对象）
-    if (
-      Array.isArray(parsedContent) &&
-      (options.fallbackData.length === 0 || parsedContent.length === options.fallbackData.length)
-    ) {
-      return parsedContent
+    if (Array.isArray(parsedContent)) {
+      // 检查长度是否匹配
+      if (options.strictLengthCheck && parsedContent.length !== options.fallbackData.length) {
+        console.error('\n响应数组长度不匹配！')
+        console.error(`期望数量: ${options.fallbackData.length}, 实际数量: ${parsedContent.length}`)
+        throw new Error(`响应数组长度不匹配: 期望 ${options.fallbackData.length} 条，实际 ${parsedContent.length} 条`)
+      }
+
+      if (options.fallbackData.length === 0 || parsedContent.length === options.fallbackData.length) {
+        return parsedContent
+      }
     }
 
     // 尝试提取任何可能的数组属性
     for (const key in parsedContent) {
-      if (
-        Array.isArray(parsedContent[key]) &&
-        (options.fallbackData.length === 0 || parsedContent[key].length === options.fallbackData.length)
-      ) {
-        console.log(`Found alternative array key: ${key} with matching length`)
-        return parsedContent[key]
+      if (Array.isArray(parsedContent[key])) {
+        const result = parsedContent[key]
+        // 检查长度是否匹配
+        if (options.strictLengthCheck && result.length !== options.fallbackData.length) {
+          continue // 长度不匹配，尝试下一个键
+        }
+
+        if (options.fallbackData.length === 0 || result.length === options.fallbackData.length) {
+          console.log(`Found alternative array key: ${key} with matching length`)
+          return result
+        }
       }
     }
 
     // 检查是否包含数字索引的对象（某些模型返回 {"0": "翻译1", "1": "翻译2"}）
     const numericKeys = Object.keys(parsedContent).filter((key) => !isNaN(Number(key)))
-    if (numericKeys.length === options.fallbackData.length) {
-      return numericKeys.map((key) => parsedContent[key])
+    if (numericKeys.length > 0) {
+      // 检查长度是否匹配
+      if (options.strictLengthCheck && numericKeys.length !== options.fallbackData.length) {
+        console.error('\n数字索引对象长度不匹配！')
+        console.error(`期望数量: ${options.fallbackData.length}, 实际数量: ${numericKeys.length}`)
+        throw new Error(`数字索引对象长度不匹配: 期望 ${options.fallbackData.length} 条，实际 ${numericKeys.length} 条`)
+      }
+
+      if (numericKeys.length === options.fallbackData.length) {
+        return numericKeys.map((key) => parsedContent[key])
+      }
+    }
+
+    // 如果启用了严格长度检查但未找到匹配的数据，抛出错误
+    if (options.strictLengthCheck) {
+      console.error('\n无法找到匹配长度的翻译结果！')
+      console.error(`期望数量: ${options.fallbackData.length}`)
+      console.error('响应内容片段:')
+      console.error(JSON.stringify(parsedContent).substring(0, 200))
+      throw new Error(`无法找到匹配长度的翻译结果: 期望 ${options.fallbackData.length} 条`)
     }
 
     // 记录更详细的错误信息以便于调试
@@ -624,8 +756,18 @@ Do not include any text outside of this JSON structure. The response must be val
 
     prompt += `
 Your task is to translate each subtitle text accurately while maintaining the original meaning and tone.
+CRITICAL REQUIREMENT: You MUST translate EXACTLY the same number of texts as provided in the input array. The length of your "translations" array MUST be IDENTICAL to the length of the input array.
+Each text must be translated individually - DO NOT merge, split, or omit any texts.
+Each translated text MUST maintain its position in the array to match the corresponding source text.
+
 Respond with a JSON object containing a "translations" array with the translated texts in the same order as the input.
-Example response format: { "translations": ["translated text 1", "translated text 2", ...] }
+Example:
+Input: ["text 1", "text 2", "text 3"]
+Correct output: { "translations": ["translated text 1", "translated text 2", "translated text 3"] }
+Incorrect output: { "translations": ["translated text 1", "translated text 2"] } // WRONG! Missing one text
+Incorrect output: { "translations": ["translated text 1", "translated text 2", "translated text 3", "extra text"] } // WRONG! Extra text added
+
+ALWAYS double-check that the number of items in your "translations" array EXACTLY matches the number of items in the input array before returning your response.
 `
 
     // 如果有术语表，添加到提示中并强调其重要性
@@ -643,8 +785,12 @@ Example response format: { "translations": ["translated text 1", "translated tex
 
       prompt += `\nWhen you encounter any of these terms in the source text, you MUST use the provided translation. This ensures consistency throughout the entire subtitle file. Do not translate these terms differently.`
 
-      // 强调响应格式
-      prompt += `\n\nIMPORTANT: Your response MUST be a valid JSON object with the exact format: { "translations": ["translated text 1", "translated text 2", ...] }`
+      // 强调响应格式和数量要求
+      prompt += `\n\nCRITICAL: Your response MUST be a valid JSON object with the exact format: { "translations": ["translated text 1", "translated text 2", ...] }`
+      prompt += `\nThe length of the "translations" array MUST be EXACTLY ${terminology.length > 0 ? 'the same as' : ''} the length of the input array. Count carefully before returning your response.`
+    } else {
+      // 没有术语表也强调一下数量一致的重要性
+      prompt += `\n\nCRITICAL: The length of the "translations" array MUST be EXACTLY the same as the length of the input array. Count carefully before returning your response.`
     }
 
     return prompt
@@ -709,6 +855,41 @@ Example response format: { "translations": ["translated text 1", "translated tex
   }
 
   /**
+   * 手动打印当前翻译进度
+   * 可以从外部调用此方法随时查看最新进度
+   */
+  public printCurrentProgress(): void {
+    this.printProgress(this.completedBatches, this.totalBatches)
+  }
+
+  /**
+   * 获取当前翻译进度详细信息
+   * @returns 翻译进度信息对象
+   */
+  public getProgressInfo(): {
+    completedBatches: number
+    totalBatches: number
+    completedPercent: number
+    translatedTexts: number
+    totalTexts: number
+    cacheHits: number
+  } {
+    const completedPercent = this.totalBatches ? Math.floor((this.completedBatches / this.totalBatches) * 100) : 0
+    const translatedTexts = this.lastTotalTexts
+      ? Math.min(this.lastTotalTexts, Math.floor((this.completedBatches / this.totalBatches) * this.lastTotalTexts))
+      : 0
+
+    return {
+      completedBatches: this.completedBatches,
+      totalBatches: this.totalBatches,
+      completedPercent,
+      translatedTexts,
+      totalTexts: this.lastTotalTexts,
+      cacheHits: this.lastCacheHits,
+    }
+  }
+
+  /**
    * Create batches from an array of texts based on character length
    * @param texts Array of text strings
    * @param maxBatchLength Maximum character length for each batch
@@ -738,5 +919,63 @@ Example response format: { "translations": ["translated text 1", "translated tex
     }
 
     return batches
+  }
+
+  /**
+   * 开始进度跟踪，设置定时更新进度信息
+   */
+  private startProgressTracking(): void {
+    // 先清除可能存在的定时器
+    this.stopProgressTracking()
+
+    // 立即打印初始进度
+    this.printProgress(0, this.totalBatches)
+
+    // 设置定时器，每秒更新一次显示（不影响实际进度更新）
+    this.progressUpdateInterval = setInterval(() => {
+      this.printProgress(this.completedBatches, this.totalBatches)
+    }, 1000)
+  }
+
+  /**
+   * 停止进度跟踪，清除定时器
+   */
+  private stopProgressTracking(): void {
+    if (this.progressUpdateInterval) {
+      clearInterval(this.progressUpdateInterval)
+      this.progressUpdateInterval = null
+    }
+  }
+
+  /**
+   * 更新已完成批次数
+   */
+  private updateProgress(): void {
+    this.completedBatches++
+
+    // 发送进度更新事件
+    this.emit('progress', this.getProgressInfo())
+  }
+
+  /**
+   * 打印翻译进度条
+   * @param completed 已完成的批次数
+   * @param total 总批次数
+   */
+  private printProgress(completed: number, total: number): void {
+    const percent = Math.floor((completed / total) * 100)
+    const barLength = 30
+    const filledLength = Math.floor((completed / total) * barLength)
+
+    // 创建进度条
+    const bar = '█'.repeat(filledLength) + '░'.repeat(barLength - filledLength)
+
+    // 计算已翻译的文本数
+    const translatedTexts = Math.min(this.lastTotalTexts, Math.floor((completed / total) * this.lastTotalTexts))
+
+    // 在同一行更新进度信息
+    process.stdout.write(
+      `\r翻译进度: [${bar}] ${percent}% | ${completed}/${total} 批次 | ${translatedTexts}/${this.lastTotalTexts} 字幕 | 缓存命中: ${this.lastCacheHits}`,
+    )
   }
 }
