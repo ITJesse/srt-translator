@@ -70,6 +70,8 @@ class SrtTranslator {
   private stopProgressBar(): void {
     if (this.progressBar) {
       this.progressBar.stop();
+      // 添加换行符，确保后续输出从新行开始
+      process.stdout.write("\n");
       this.progressBar = null;
     }
   }
@@ -183,11 +185,17 @@ class SrtTranslator {
       );
 
       // Write translated SRT file
-      await this.srtService.writeSrtFile(translatedSubtitles, outputPath);
+      const savedPath = await this.srtService.writeSrtFile(
+        translatedSubtitles,
+        outputPath
+      );
 
+      // 先停止进度条，再输出保存信息
       this.stopProgressBar();
 
-      console.log("Translation completed successfully!");
+      // 输出保存信息
+      console.log(`Translated subtitles saved to: ${savedPath}`);
+      console.log("\nTranslation completed successfully!");
     } catch (error) {
       // 确保进度条被停止
       this.stopProgressBar();
@@ -246,7 +254,20 @@ class SrtTranslator {
     };
 
     // 执行翻译
-    return await translationService.translateTexts(texts, options);
+    const results = await translationService.translateTexts(texts, options);
+
+    // 翻译完成后，显示缓存命中信息
+    const cacheInfo = translationService.getCacheHitInfo();
+    if (cacheInfo.total > 0) {
+      this.stopProgressBar();
+      console.log(`Cache hits: ${cacheInfo.hits}/${cacheInfo.total}`);
+      console.log(
+        `Created ${translationService.getLastBatchesCount()} batches for translation`
+      );
+      // 不再重新创建进度条，让主流程处理进度条的创建和停止
+    }
+
+    return results;
   }
 
   /**

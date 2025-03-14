@@ -10,6 +10,9 @@ export class TranslationService {
   private openai: OpenAI;
   private model: string;
   private cacheService: CacheService;
+  private lastCacheHits: number = 0;
+  private lastTotalTexts: number = 0;
+  private lastBatchesCount: number = 0;
 
   /**
    * Initialize the translation service
@@ -98,6 +101,7 @@ export class TranslationService {
     const translationResults: string[] = new Array(texts.length);
     const textsToTranslate: string[] = [];
     const indexMap: number[] = [];
+    let cacheHits = 0;
 
     // 首先检查缓存
     if (this.cacheService.isEnabled()) {
@@ -111,6 +115,7 @@ export class TranslationService {
 
         if (cachedTranslation) {
           translationResults[i] = cachedTranslation;
+          cacheHits++;
           // 移除详细的缓存命中日志，避免干扰进度条
           // console.log(`Cache hit for text: "${texts[i].substring(0, 30)}${texts[i].length > 30 ? "..." : ""}"`);
         } else {
@@ -119,9 +124,9 @@ export class TranslationService {
         }
       }
 
-      console.log(
-        `Cache hits: ${texts.length - textsToTranslate.length}/${texts.length}`
-      );
+      // 将缓存命中信息存储为属性，而不是直接输出
+      this.lastCacheHits = cacheHits;
+      this.lastTotalTexts = texts.length;
     } else {
       textsToTranslate.push(...texts);
       indexMap.push(...Array.from({ length: texts.length }, (_, i) => i));
@@ -129,7 +134,8 @@ export class TranslationService {
 
     // 如果所有文本都已缓存，直接返回结果
     if (textsToTranslate.length === 0) {
-      console.log("All translations found in cache");
+      // 不直接输出到控制台，而是设置属性
+      this.lastBatchesCount = 0;
       return translationResults;
     }
 
@@ -138,7 +144,8 @@ export class TranslationService {
       textsToTranslate,
       maxBatchLength as number
     );
-    console.log(`Created ${batches.length} batches for translation`);
+    // 存储批次信息而不是直接输出
+    this.lastBatchesCount = batches.length;
 
     // 翻译未缓存的文本
     // 使用并行处理批次，默认并发数为1（相当于顺序处理）
@@ -313,16 +320,36 @@ export class TranslationService {
         throw new Error("No content in translation response");
       }
 
+      // 清理内容，移除可能的 Markdown 代码块标记
+      let cleanedContent = content.trim();
+
+      // 移除开头的 ```json 或其他代码块标记
+      if (cleanedContent.startsWith("```")) {
+        const firstLineEnd = cleanedContent.indexOf("\n");
+        if (firstLineEnd !== -1) {
+          cleanedContent = cleanedContent.substring(firstLineEnd + 1);
+        }
+      }
+
+      // 移除结尾的 ``` 标记
+      if (cleanedContent.endsWith("```")) {
+        cleanedContent = cleanedContent
+          .substring(0, cleanedContent.lastIndexOf("```"))
+          .trim();
+      }
+
       // Parse the JSON response
       let parsedContent;
       try {
-        parsedContent = JSON.parse(content);
+        parsedContent = JSON.parse(cleanedContent);
       } catch (error) {
-        console.error("Failed to parse JSON response:", content);
+        console.error("Failed to parse JSON response:", cleanedContent);
         // 尝试从非JSON响应中提取翻译结果
-        if (Array.isArray(batch) && content.includes("\n")) {
+        if (Array.isArray(batch) && cleanedContent.includes("\n")) {
           // 假设每行对应一个翻译
-          const lines = content.split("\n").filter((line) => line.trim());
+          const lines = cleanedContent
+            .split("\n")
+            .filter((line) => line.trim());
           if (lines.length === batch.length) {
             return lines;
           }
@@ -404,5 +431,24 @@ Example response format: { "translations": ["translated text 1", "translated tex
    */
   public getModel(): string {
     return this.model;
+  }
+
+  /**
+   * 获取最后一次翻译的缓存命中信息
+   * @returns 缓存命中信息 {hits: number, total: number}
+   */
+  public getCacheHitInfo(): { hits: number; total: number } {
+    return {
+      hits: this.lastCacheHits,
+      total: this.lastTotalTexts,
+    };
+  }
+
+  /**
+   * 获取最后一次翻译的批次数量
+   * @returns 批次数量
+   */
+  public getLastBatchesCount(): number {
+    return this.lastBatchesCount;
   }
 }
