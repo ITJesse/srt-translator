@@ -15,7 +15,6 @@ export interface TranslationOptions {
   sourceLanguage?: string;
   targetLanguage: string;
   model?: string;
-  preserveFormatting?: boolean;
   apiKey?: string;
   baseUrl?: string;
   maxBatchLength?: number;
@@ -38,7 +37,6 @@ export interface CliOptions {
   sourceLanguage: string;
   targetLanguage: string;
   model: string;
-  preserveFormatting: boolean;
   apiKey: string;
   baseUrl: string;
   maxBatchLength: number;

@@ -103,7 +103,6 @@ Options:
   -s, --source-language <language>  Source language (auto-detect if not specified)
   -t, --target-language <language>  Target language
   -m, --model <model>         OpenAI model to use
-  -p, --preserve-formatting   Preserve original formatting
   -k, --api-key <key>         OpenAI API key (overrides OPENAI_API_KEY environment variable)
   -b, --base-url <url>        OpenAI API base URL (overrides OPENAI_API_BASE_URL environment variable)
   -l, --max-batch-length <length>  Maximum character length per batch
@@ -114,7 +113,6 @@ Options:
 Default values:
   - Target language: English
   - Model: Value from DEFAULT_MODEL environment variable or gpt-3.5-turbo
-  - Preserve formatting: true
   - Max batch length: 2000 characters
 ```
 

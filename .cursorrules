@@ -11,6 +11,8 @@
 - 使用UPPER_SNAKE_CASE命名常量
 - 所有函数和方法必须有JSDoc注释
 - 所有文件末尾留一空行
+- 更新代码后删除陈旧的逻辑
+- 更新代码时需保持生成代码的简洁，合并重复的代码
 
 // Project Structure
 - 源代码放在src目录下
@@ -22,10 +24,6 @@
 - 使用feature分支开发新功能
 - 提交信息使用英文，格式为"feat/fix/docs/style/refactor/test/chore: 简短描述"
 - 合并前进行代码审查
-
-// Testing
-- 为所有核心功能编写单元测试
-- 测试覆盖率目标>80%
 
 // Documentation
 - README.md保持更新
@@ -56,3 +54,6 @@
 - 使用英文输出提示
 - 使用英文输出日志
 - 使用英文输出界面
+
+// 其他
+- 所有模型都可以使用 response_format

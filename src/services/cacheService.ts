@@ -53,61 +53,47 @@ export class CacheService {
   }
 
   /**
-   * 生成缓存键
-   * @param text 原文本
-   * @param targetLanguage 目标语言
-   * @param sourceLanguage 源语言
-   * @param model 使用的模型
+   * 为API请求生成缓存键
+   * @param requestParams API请求参数
    * @returns 缓存键
    */
-  private generateKey(
-    text: string,
-    targetLanguage: string,
-    sourceLanguage?: string,
-    model?: string
-  ): string {
-    const keyString = `${text}|${sourceLanguage || ""}|${targetLanguage}|${
-      model || ""
-    }`;
-    // 使用 MD5 哈希生成文件名安全的缓存键
-    return crypto.createHash("md5").update(keyString).digest("hex");
+  public generateApiKey(requestParams: any): string {
+    // 将请求参数转换为排序后的JSON字符串，确保相同参数的不同顺序生成相同的键
+    const sortedParams = JSON.stringify(
+      requestParams,
+      Object.keys(requestParams).sort()
+    );
+    return crypto.createHash("md5").update(sortedParams).digest("hex");
   }
 
   /**
-   * 获取缓存文件路径
+   * 获取API缓存文件路径
    * @param key 缓存键
    * @returns 缓存文件路径
    */
-  private getCacheFilePath(key: string): string {
-    return path.join(this.cacheDir, `${key}.txt`);
+  private getApiCacheFilePath(key: string): string {
+    return path.join(this.cacheDir, `api_${key}.json`);
   }
 
   /**
-   * 获取缓存的翻译结果
-   * @param text 原文本
-   * @param targetLanguage 目标语言
-   * @param sourceLanguage 源语言
-   * @param model 使用的模型
-   * @returns 缓存的翻译结果，如果没有缓存则返回null
+   * 获取缓存的API响应
+   * @param requestParams API请求参数
+   * @returns 缓存的API响应，如果没有缓存则返回null
    */
-  public get(
-    text: string,
-    targetLanguage: string,
-    sourceLanguage?: string,
-    model?: string
-  ): string | null {
+  public getApiResponse(requestParams: any): any | null {
     if (!this.enabled) return null;
 
-    const key = this.generateKey(text, targetLanguage, sourceLanguage, model);
-    const cacheFilePath = this.getCacheFilePath(key);
+    const key = this.generateApiKey(requestParams);
+    const cacheFilePath = this.getApiCacheFilePath(key);
 
     try {
       if (fs.existsSync(cacheFilePath)) {
-        return fs.readFileSync(cacheFilePath, "utf-8");
+        const cachedData = fs.readFileSync(cacheFilePath, "utf-8");
+        return JSON.parse(cachedData);
       }
     } catch (error) {
       console.error(
-        `Failed to read cache file: ${
+        `Failed to read API cache file: ${
           error instanceof Error ? error.message : String(error)
         }`
       );
@@ -117,30 +103,21 @@ export class CacheService {
   }
 
   /**
-   * 设置缓存
-   * @param text 原文本
-   * @param translation 翻译结果
-   * @param targetLanguage 目标语言
-   * @param sourceLanguage 源语言
-   * @param model 使用的模型
+   * 设置API响应缓存
+   * @param requestParams API请求参数
+   * @param response API响应结果
    */
-  public set(
-    text: string,
-    translation: string,
-    targetLanguage: string,
-    sourceLanguage?: string,
-    model?: string
-  ): void {
+  public setApiResponse(requestParams: any, response: any): void {
     if (!this.enabled) return;
 
-    const key = this.generateKey(text, targetLanguage, sourceLanguage, model);
-    const cacheFilePath = this.getCacheFilePath(key);
+    const key = this.generateApiKey(requestParams);
+    const cacheFilePath = this.getApiCacheFilePath(key);
 
     try {
-      fs.writeFileSync(cacheFilePath, translation, "utf-8");
+      fs.writeFileSync(cacheFilePath, JSON.stringify(response), "utf-8");
     } catch (error) {
       console.error(
-        `Failed to write cache file: ${
+        `Failed to write API cache file: ${
           error instanceof Error ? error.message : String(error)
         }`
       );

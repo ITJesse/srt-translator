@@ -88,7 +88,6 @@ class SrtTranslator {
         sourceLanguage,
         targetLanguage,
         model,
-        preserveFormatting,
         apiKey,
         baseUrl,
         maxBatchLength,
@@ -162,7 +161,6 @@ class SrtTranslator {
         sourceLanguage,
         targetLanguage,
         model,
-        preserveFormatting,
         apiKey,
         baseUrl,
         maxBatchLength,
@@ -367,7 +365,6 @@ function setupCli(): Command {
     )
     .option("-t, --target-language <language>", "Target language")
     .option("-m, --model <model>", "OpenAI model to use")
-    .option("-p, --preserve-formatting", "Preserve original formatting")
     .option(
       "-k, --api-key <key>",
       "OpenAI API key (overrides OPENAI_API_KEY environment variable)"
@@ -411,7 +408,6 @@ function setupCli(): Command {
     )
     .option("-t, --target-language <language>", "Target language")
     .option("-m, --model <model>", "OpenAI model to use")
-    .option("-p, --preserve-formatting", "Preserve original formatting")
     .option(
       "-k, --api-key <key>",
       "OpenAI API key (overrides OPENAI_API_KEY environment variable)"

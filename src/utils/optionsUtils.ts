@@ -26,10 +26,6 @@ export function processOptions(
     targetLanguage:
       rawOptions.targetLanguage || process.env.DEFAULT_TARGET_LANGUAGE,
     model: rawOptions.model || process.env.DEFAULT_MODEL || "gpt-3.5-turbo",
-    preserveFormatting:
-      rawOptions.preserveFormatting !== undefined
-        ? rawOptions.preserveFormatting
-        : true,
     apiKey: rawOptions.apiKey || process.env.OPENAI_API_KEY || "",
     baseUrl:
       rawOptions.baseUrl ||
