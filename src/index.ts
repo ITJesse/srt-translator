@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import * as cliProgress from 'cli-progress'
 import { Command } from 'commander'
 import * as dotenv from 'dotenv'
 import { glob } from 'glob'
@@ -21,6 +22,7 @@ class SrtTranslator {
   private srtService: SrtService;
   private translationService!: TranslationService;
   private verbose: boolean = false;
+  private progressBar: cliProgress.SingleBar | null = null;
 
   constructor(verbose: boolean = false) {
     this.srtService = new SrtService();
@@ -34,6 +36,41 @@ class SrtTranslator {
   private log(message: string): void {
     if (this.verbose) {
       console.log(message);
+    }
+  }
+
+  /**
+   * 创建进度条
+   * @param total 总数
+   * @param title 进度条标题
+   */
+  private createProgressBar(total: number, title: string): void {
+    this.progressBar = new cliProgress.SingleBar({
+      format: `${title} [{bar}] {percentage}% | {value}/{total} | Time: {duration_formatted}`,
+      barCompleteChar: "\u2588",
+      barIncompleteChar: "\u2591",
+      hideCursor: true,
+    });
+    this.progressBar.start(total, 0);
+  }
+
+  /**
+   * 更新进度条
+   * @param value 当前进度值
+   */
+  private updateProgressBar(value: number): void {
+    if (this.progressBar) {
+      this.progressBar.update(value);
+    }
+  }
+
+  /**
+   * 停止进度条
+   */
+  private stopProgressBar(): void {
+    if (this.progressBar) {
+      this.progressBar.stop();
+      this.progressBar = null;
     }
   }
 
@@ -75,12 +112,17 @@ class SrtTranslator {
       // Ensure output directory exists
       await FileUtils.ensureDirectoryExists(path.dirname(outputPath));
 
-      console.log(`Translating: ${input}`);
+      console.log(`Translating file: ${input}`);
       console.log(`Target language: ${targetLanguage}`);
-      console.log(`Output: ${outputPath}`);
+      console.log(`Output file: ${outputPath}`);
+
+      // 创建解析进度条
+      this.createProgressBar(1, "Parsing subtitles");
 
       // Parse SRT file
       const subtitles = await this.srtService.parseSrtFile(input);
+      this.stopProgressBar();
+
       this.log(`Found ${subtitles.length} subtitle entries`);
 
       // Extract text for translation
@@ -90,9 +132,13 @@ class SrtTranslator {
       // Use initialized translationService
       const translationService = this.translationService;
 
-      // Translate texts
+      // 创建翻译进度条
       console.log("Starting translation...");
-      const translatedTexts = await translationService.translateTexts(
+      this.createProgressBar(textsToTranslate.length, "Translation progress");
+
+      // 创建一个包装的翻译服务，用于更新进度条
+      const translatedTexts = await this.translateWithProgress(
+        translationService,
         textsToTranslate,
         {
           sourceLanguage,
@@ -106,6 +152,11 @@ class SrtTranslator {
         }
       );
 
+      this.stopProgressBar();
+
+      // 创建写入进度条
+      this.createProgressBar(1, "Writing results");
+
       // Create translated subtitles
       const translatedSubtitles = this.srtService.createTranslatedSubtitles(
         subtitles,
@@ -115,13 +166,59 @@ class SrtTranslator {
       // Write translated SRT file
       await this.srtService.writeSrtFile(translatedSubtitles, outputPath);
 
+      this.stopProgressBar();
+
       console.log("Translation completed successfully!");
     } catch (error) {
+      // 确保进度条被停止
+      this.stopProgressBar();
+
       console.error(
         `Error: ${error instanceof Error ? error.message : String(error)}`
       );
       process.exit(1);
     }
+  }
+
+  /**
+   * 带进度条的翻译方法
+   * @param translationService 翻译服务
+   * @param texts 要翻译的文本数组
+   * @param options 翻译选项
+   * @returns 翻译后的文本数组
+   */
+  private async translateWithProgress(
+    translationService: TranslationService,
+    texts: string[],
+    options: TranslationOptions
+  ): Promise<string[]> {
+    // 创建一个计数器来跟踪已完成的翻译
+    let completedCount = 0;
+
+    // 创建一个代理方法来拦截翻译批次的完成
+    const originalTranslateTexts =
+      translationService.translateTexts.bind(translationService);
+
+    // 重写翻译方法以添加进度更新
+    translationService.translateTexts = async (
+      textsToTranslate: string[],
+      translationOptions: TranslationOptions
+    ): Promise<string[]> => {
+      // 调用原始方法
+      const result = await originalTranslateTexts(
+        textsToTranslate,
+        translationOptions
+      );
+
+      // 更新进度
+      completedCount += textsToTranslate.length;
+      this.updateProgressBar(completedCount);
+
+      return result;
+    };
+
+    // 执行翻译
+    return await translationService.translateTexts(texts, options);
   }
 
   /**
@@ -137,6 +234,9 @@ class SrtTranslator {
   ): Promise<void> {
     try {
       // Find all matching files
+      console.log("Searching for matching subtitle files...");
+      this.createProgressBar(1, "Finding files");
+
       const inputFiles: string[] = [];
       for (const pattern of patterns) {
         // Use the modern async glob API
@@ -144,11 +244,15 @@ class SrtTranslator {
         inputFiles.push(...matches.filter((file) => FileUtils.isSrtFile(file)));
       }
 
+      this.stopProgressBar();
+
       if (inputFiles.length === 0) {
         throw new Error("No SRT files found matching the provided patterns");
       }
 
       console.log(`Found ${inputFiles.length} SRT files to process`);
+      this.createProgressBar(inputFiles.length, "Batch processing progress");
+      let processedCount = 0;
 
       if (parallel) {
         // Process files in parallel
@@ -162,13 +266,20 @@ class SrtTranslator {
                 input,
                 options.targetLanguage
               ),
-            }).catch((error: unknown) => {
-              console.error(
-                `Error processing ${input}: ${
-                  error instanceof Error ? error.message : String(error)
-                }`
-              );
             })
+              .then(() => {
+                processedCount++;
+                this.updateProgressBar(processedCount);
+              })
+              .catch((error: unknown) => {
+                console.error(
+                  `Error processing ${input}: ${
+                    error instanceof Error ? error.message : String(error)
+                  }`
+                );
+                processedCount++;
+                this.updateProgressBar(processedCount);
+              })
           )
         );
       } else {
@@ -191,11 +302,17 @@ class SrtTranslator {
               }`
             );
           }
+          processedCount++;
+          this.updateProgressBar(processedCount);
         }
       }
 
+      this.stopProgressBar();
       console.log("Batch processing completed!");
     } catch (error) {
+      // 确保进度条被停止
+      this.stopProgressBar();
+
       console.error(
         `Error: ${error instanceof Error ? error.message : String(error)}`
       );

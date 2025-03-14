@@ -119,11 +119,14 @@ export class TranslationService {
         (sum, text) => sum + text.length,
         0
       );
-      console.log(
-        `Translating batch ${i + 1}/${
-          batches.length
-        } (${batchItemCount} items, ${batchTotalLength} characters)...`
-      );
+
+      if (batches.length > 1) {
+        console.log(
+          `Translating batch ${i + 1}/${
+            batches.length
+          } (${batchItemCount} items, ${batchTotalLength} characters)...`
+        );
+      }
 
       const translatedBatch = await this.translateBatch(
         batch,
@@ -164,11 +167,6 @@ export class TranslationService {
         const batchTotalLength = batch.reduce(
           (sum, text) => sum + text.length,
           0
-        );
-        console.log(
-          `Translating batch ${batchIndex + 1}/${
-            batches.length
-          } (${batchItemCount} items, ${batchTotalLength} characters)...`
         );
 
         try {
