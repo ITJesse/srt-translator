@@ -269,12 +269,47 @@ IMPORTANT: Your response MUST follow this exact JSON format:
   ]
 }
 
+Here are examples of good terminology extraction and translation:
+
+Example 1 - Movie subtitles with character names:
+Input text contains multiple instances of "Tony Stark", "Iron Man", "Avengers"
+Good output:
+{
+  "terminology": [
+    {"original": "Tony Stark", "translated": "托尼·斯塔克"},
+    {"original": "Iron Man", "translated": "钢铁侠"},
+    {"original": "Avengers", "translated": "复仇者"}
+  ]
+}
+
+Example 2 - Technical documentation:
+Input text contains multiple instances of "machine learning", "neural network", "data processing"
+Good output:
+{
+  "terminology": [
+    {"original": "machine learning", "translated": "机器学习"},
+    {"original": "neural network", "translated": "神经网络"},
+    {"original": "data processing", "translated": "数据处理"}
+  ]
+}
+
+Example 3 - TV show with recurring phrases:
+Input text contains characters repeatedly saying "Winter is coming" and "You know nothing"
+Good output:
+{
+  "terminology": [
+    {"original": "Winter is coming", "translated": "凛冬将至"},
+    {"original": "You know nothing", "translated": "你什么都不知道"}
+  ]
+}
+
 CRITICAL REQUIREMENTS:
 1. Each "original" term MUST have exactly one corresponding "translated" term
 2. Do not combine multiple terms into one entry
 3. Do not split a single term into multiple entries
 4. Each term should be meaningful and complete (not just partial words)
 5. Ensure all extracted terms actually appear in the source text
+6. Only extract terms that appear multiple times and need consistent translation
 
 Do not include any text outside of this JSON structure. The response must be valid parseable JSON.`
 
@@ -288,7 +323,7 @@ Do not include any text outside of this JSON structure. The response must be val
           { role: 'system', content: extractAndTranslatePrompt },
           {
             role: 'user',
-            content: `Extract and translate important terms from the following subtitle text:\n\n${allTexts}\n\nCRITICAL: Respond ONLY with a valid JSON object containing the terminology array. Each term in the source language MUST have exactly ONE corresponding translation. Make sure your JSON is valid and follows the required format exactly:\n{\n  "terminology": [\n    {"original": "term1", "translated": "translation1"},\n    {"original": "term2", "translated": "translation2"}\n  ]\n}`,
+            content: `Extract and translate important terms from the following subtitle text:\n\n${allTexts}\n\nCRITICAL: Respond ONLY with a valid JSON object containing the terminology array. Each term in the source language MUST have exactly ONE corresponding translation. Make sure your JSON is valid and follows the required format exactly:\n{\n  "terminology": [\n    {"original": "term1", "translated": "translation1"},\n    {"original": "term2", "translated": "translation2"}\n  ]\n}\n\nFocus on identifying terms that appear multiple times and need consistent translation, such as character names, technical terms, locations, and recurring phrases. The quality and consistency of these translations will greatly impact the overall subtitle translation.`,
           },
         ],
         temperature: 0.3,
@@ -459,60 +494,77 @@ Do not include any text outside of this JSON structure. The response must be val
    * @returns Array of translated text strings
    */
   private async translateBatch(batch: string[], systemPrompt: string, model: string): Promise<string[]> {
-    try {
-      // Format the batch as a JSON array string
-      const batchJson = JSON.stringify(batch)
+    let retryCount = 0
+    const MAX_RETRIES = 3
 
-      // 创建请求选项
-      const requestOptions: any = {
-        model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          {
-            role: 'user',
-            content: `Translate the following subtitle texts (provided as JSON array):\n${batchJson}\n\nCRITICAL: Your response MUST contain EXACTLY ${batch.length} translated texts. The "translations" array MUST have the SAME LENGTH as the input array (${batch.length} items).\n\nProvide the translated texts in a JSON object with a "translations" array in the same order. Example: { "translations": ["translated text 1", "translated text 2", ...] }`,
-          },
-        ],
-        temperature: 0.3,
-        response_format: { type: 'json_object' },
-      }
+    while (retryCount <= MAX_RETRIES) {
+      try {
+        // Format the batch as a JSON array string
+        const batchJson = JSON.stringify(batch)
 
-      // 检查API请求缓存
-      const cachedResponse = this.cacheService.getApiResponse(requestOptions)
-      if (cachedResponse) {
-        // 如果有缓存的API响应，直接使用
-        const content = cachedResponse.choices[0]?.message.content
-        if (content) {
-          // 处理缓存的响应内容
-          return this.processResponseContent(content, batch)
+        // 创建请求选项
+        const requestOptions: any = {
+          model,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            {
+              role: 'user',
+              content: `Translate the following subtitle texts (provided as JSON array):\n${batchJson}\n\nCRITICAL: Your response MUST contain EXACTLY ${batch.length} translated texts. The "translations" array MUST have the SAME LENGTH as the input array (${batch.length} items).\n\nProvide the translated texts in a JSON object with a "translations" array in the same order. Example: { "translations": ["translated text 1", "translated text 2", ...] }\n\nGuidelines for high-quality subtitle translation:\n1. Maintain the original meaning, tone, and intent\n2. Preserve all formatting tags like <i>, <b>, \\n, etc.\n3. Keep translated text concise and suitable for on-screen reading\n4. Consider cultural context and nuances\n5. Translate idioms appropriately rather than literally when needed\n\nCOUNT CAREFULLY: Confirm that your "translations" array contains exactly ${batch.length} items before responding.`,
+            },
+          ],
+          temperature: 0.3,
+          response_format: { type: 'json_object' },
         }
+
+        // 检查API请求缓存
+        const cachedResponse = this.cacheService.getApiResponse(requestOptions)
+        if (cachedResponse) {
+          // 如果有缓存的API响应，直接使用
+          const content = cachedResponse.choices[0]?.message.content
+          if (content) {
+            // 处理缓存的响应内容
+            return this.processResponseContent(content, batch)
+          }
+        }
+
+        // 如果没有缓存或缓存处理失败，发送API请求
+        const response = await this.openai.chat.completions.create(requestOptions)
+
+        // 缓存API响应
+        if (this.cacheService.isEnabled()) {
+          this.cacheService.setApiResponse(requestOptions, response)
+        }
+
+        const content = response.choices[0]?.message.content
+
+        if (!content) {
+          throw new Error('No content in translation response')
+        }
+
+        return this.processResponseContent(content, batch)
+      } catch (error) {
+        retryCount++
+
+        // 如果是由于翻译结果数量不匹配引起的错误，并且还有重试次数，则进行重试
+        if (error instanceof Error && error.message.includes('翻译结果数量不匹配') && retryCount <= MAX_RETRIES) {
+          console.error(`批次翻译结果数量不匹配，进行第 ${retryCount} 次重试 (最多 ${MAX_RETRIES} 次)...`)
+          // 继续下一次循环进行重试
+          continue
+        }
+
+        // 如果已经达到最大重试次数或者是其他错误，则抛出错误
+        console.error(`Translation error: ${error instanceof Error ? error.message : String(error)}`)
+
+        if (retryCount > MAX_RETRIES && error instanceof Error && error.message.includes('翻译结果数量不匹配')) {
+          throw new Error(`批次翻译失败：已重试 ${MAX_RETRIES} 次，但结果数量仍不匹配。${error.message}`)
+        }
+
+        throw error
       }
-
-      // 如果没有缓存或缓存处理失败，发送API请求
-      const response = await this.openai.chat.completions.create(requestOptions)
-
-      // 缓存API响应
-      if (this.cacheService.isEnabled()) {
-        this.cacheService.setApiResponse(requestOptions, response)
-      }
-
-      const content = response.choices[0]?.message.content
-
-      if (!content) {
-        throw new Error('No content in translation response')
-      }
-
-      return this.processResponseContent(content, batch)
-    } catch (error) {
-      console.error(`Translation error: ${error instanceof Error ? error.message : String(error)}`)
-
-      // 如果是由于翻译结果数量不匹配引起的错误，不再尝试继续处理
-      if (error instanceof Error && error.message.includes('翻译结果数量不匹配')) {
-        throw new Error(`批次翻译失败：${error.message}`)
-      }
-
-      throw error
     }
+
+    // 这里不应该被执行到，但为了TypeScript类型检查，返回空数组
+    return []
   }
 
   /**
@@ -761,11 +813,38 @@ Each text must be translated individually - DO NOT merge, split, or omit any tex
 Each translated text MUST maintain its position in the array to match the corresponding source text.
 
 Respond with a JSON object containing a "translations" array with the translated texts in the same order as the input.
-Example:
-Input: ["text 1", "text 2", "text 3"]
-Correct output: { "translations": ["translated text 1", "translated text 2", "translated text 3"] }
-Incorrect output: { "translations": ["translated text 1", "translated text 2"] } // WRONG! Missing one text
-Incorrect output: { "translations": ["translated text 1", "translated text 2", "translated text 3", "extra text"] } // WRONG! Extra text added
+
+Here are detailed examples with various input types:
+
+Example 1 - Simple subtitle texts:
+Input: ["Hello, how are you?", "I'm fine, thank you.", "See you tomorrow."]
+Correct output: { 
+  "translations": ["你好，你好吗？", "我很好，谢谢。", "明天见。"] 
+}
+
+Example 2 - Subtitle texts with formatting:
+Input: ["<i>Speaking softly</i> Come here.", "Don't go there! <b>It's dangerous!</b>", "Line 1\\nLine 2"]
+Correct output: { 
+  "translations": ["<i>轻声说话</i> 过来。", "不要去那里！<b>太危险了！</b>", "第一行\\n第二行"] 
+}
+
+Example 3 - Technical content:
+Input: ["The API returns a JSON object.", "Error: Connection timeout after 30 seconds.", "Click 'Download' to save the file."]
+Correct output: {
+  "translations": ["API 返回一个 JSON 对象。", "错误：连接在 30 秒后超时。", "点击'下载'保存文件。"]
+}
+
+Example 4 - Idioms and cultural references:
+Input: ["It's raining cats and dogs.", "Break a leg!", "That costs an arm and a leg."]
+Correct output: {
+  "translations": ["下着倾盆大雨。", "祝你好运！", "那个非常贵。"]
+}
+
+Incorrect examples to avoid:
+Incorrect output 1: { "translations": ["translated text 1", "translated text 2"] } // WRONG! Missing one text
+Incorrect output 2: { "translations": ["translated text 1", "translated text 2", "translated text 3", "extra text"] } // WRONG! Extra text added
+Incorrect output 3: "translated text 1, translated text 2, translated text 3" // WRONG! Not a valid JSON object
+Incorrect output 4: { "result": ["translated text 1", "translated text 2", "translated text 3"] } // WRONG! Wrong property name (should be "translations")
 
 ALWAYS double-check that the number of items in your "translations" array EXACTLY matches the number of items in the input array before returning your response.
 `
@@ -785,13 +864,26 @@ ALWAYS double-check that the number of items in your "translations" array EXACTL
 
       prompt += `\nWhen you encounter any of these terms in the source text, you MUST use the provided translation. This ensures consistency throughout the entire subtitle file. Do not translate these terms differently.`
 
+      // 添加术语表使用的示例
+      prompt += `\n\nExample of using terminology correctly:
+Given terminology table:
+Original | Translation
+-------- | -----------
+neural network | 神经网络
+deep learning | 深度学习
+AI model | AI模型
+
+Input: ["The neural network was trained using deep learning techniques.", "This AI model performs better than previous versions."]
+Correct output: {
+  "translations": ["这个神经网络是使用深度学习技术训练的。", "这个AI模型比之前的版本表现更好。"]
+}
+Notice how "neural network" is consistently translated as "神经网络", "deep learning" as "深度学习", and "AI model" as "AI模型".
+`
+
       // 强调响应格式和数量要求
       prompt += `\n\nCRITICAL: Your response MUST be a valid JSON object with the exact format: { "translations": ["translated text 1", "translated text 2", ...] }`
-      prompt += `\nThe length of the "translations" array MUST be EXACTLY ${terminology.length > 0 ? 'the same as' : ''} the length of the input array. Count carefully before returning your response.`
-    } else {
-      // 没有术语表也强调一下数量一致的重要性
-      prompt += `\n\nCRITICAL: The length of the "translations" array MUST be EXACTLY the same as the length of the input array. Count carefully before returning your response.`
     }
+    prompt += `\n\nCRITICAL: The length of the "translations" array MUST be EXACTLY the same as the length of the input array. Count carefully before returning your response.`
 
     return prompt
   }
