@@ -1,3 +1,6 @@
+import * as os from 'os'
+import * as path from 'path'
+
 import { CliOptions } from '../types'
 
 /**
@@ -14,6 +17,10 @@ export function processOptions(
   if (!rawOptions.apiKey && !process.env.OPENAI_API_KEY) {
     throw new Error("API key is required");
   }
+
+  // 默认缓存目录
+  const defaultCacheDir = path.join(os.homedir(), ".srt-translator", "cache");
+
   return {
     sourceLanguage: rawOptions.sourceLanguage || "",
     targetLanguage:
@@ -34,5 +41,7 @@ export function processOptions(
     concurrentRequests: rawOptions.concurrentRequests
       ? parseInt(rawOptions.concurrentRequests, 10)
       : 5,
+    enableCache: rawOptions.cache !== false, // 默认启用缓存，只有明确设置 --no-cache 才禁用
+    cacheDir: rawOptions.cacheDir || process.env.CACHE_DIR || defaultCacheDir,
   };
 }

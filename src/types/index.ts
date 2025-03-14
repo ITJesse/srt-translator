@@ -20,6 +20,8 @@ export interface TranslationOptions {
   baseUrl?: string;
   maxBatchLength?: number;
   concurrentRequests?: number;
+  enableCache?: boolean;
+  cacheDir?: string;
 }
 
 // CLI options
@@ -34,4 +36,6 @@ export interface CliOptions {
   baseUrl: string;
   maxBatchLength: number;
   concurrentRequests: number;
+  enableCache: boolean;
+  cacheDir: string;
 }

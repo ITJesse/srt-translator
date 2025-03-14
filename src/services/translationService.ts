@@ -1,6 +1,7 @@
 import OpenAI from 'openai'
 
 import { TranslationOptions } from '../types'
+import { CacheService } from './cacheService'
 
 /**
  * Service for handling translations using OpenAI API
@@ -8,14 +9,23 @@ import { TranslationOptions } from '../types'
 export class TranslationService {
   private openai: OpenAI;
   private model: string;
+  private cacheService: CacheService;
 
   /**
    * Initialize the translation service
    * @param apiKey OpenAI API key
    * @param baseUrl OpenAI API base URL
    * @param model OpenAI model to use
+   * @param enableCache Whether to enable caching (default: true)
+   * @param cacheDir Cache directory (default: ~/.srt-translator/cache)
    */
-  constructor(apiKey: string, baseUrl: string, model: string) {
+  constructor(
+    apiKey: string,
+    baseUrl: string,
+    model: string,
+    enableCache: boolean = true,
+    cacheDir?: string
+  ) {
     if (!apiKey) {
       throw new Error("API key is required");
     }
@@ -30,7 +40,7 @@ export class TranslationService {
     });
 
     this.model = model;
-    console.log(`Initialized TranslationService with model: ${this.model}`);
+    this.cacheService = new CacheService(enableCache, cacheDir);
   }
 
   /**
@@ -52,14 +62,22 @@ export class TranslationService {
       baseUrl,
       maxBatchLength,
       concurrentRequests,
+      enableCache,
+      cacheDir,
     } = options;
 
     // 使用传入的模型
     const modelToUse = model || this.model;
 
-    // 输出使用的模型信息
-    console.log(`Using translation model: ${modelToUse}`);
-    console.log(`Concurrent requests: ${concurrentRequests}`);
+    // 设置缓存状态
+    if (enableCache !== undefined) {
+      this.cacheService.setEnabled(enableCache);
+    }
+
+    // 设置缓存目录
+    if (cacheDir) {
+      this.cacheService.setCacheDir(cacheDir);
+    }
 
     // Reinitialize OpenAI client if custom API key or baseUrl is provided
     if (apiKey || baseUrl) {
@@ -76,68 +94,87 @@ export class TranslationService {
       sourceLanguage
     );
 
-    // Process texts in batches based on text length to avoid token limits
-    const batches = this.createBatches(texts, maxBatchLength as number);
-    console.log(`Created ${batches.length} batches for translation`);
+    // 检查缓存并过滤需要翻译的文本
+    const translationResults: string[] = new Array(texts.length);
+    const textsToTranslate: string[] = [];
+    const indexMap: number[] = [];
 
-    // 使用并行处理批次
-    if (concurrentRequests && concurrentRequests > 1) {
-      return await this.translateBatchesParallel(
-        batches,
-        systemPrompt,
-        modelToUse,
-        concurrentRequests
-      );
-    } else {
-      // 使用原有的顺序处理方式
-      return await this.translateBatchesSequential(
-        batches,
-        systemPrompt,
-        modelToUse
-      );
-    }
-  }
-
-  /**
-   * 顺序处理批次
-   * @param batches 批次数组
-   * @param systemPrompt 系统提示
-   * @param model 使用的模型
-   * @returns 翻译结果数组
-   */
-  private async translateBatchesSequential(
-    batches: string[][],
-    systemPrompt: string,
-    model: string
-  ): Promise<string[]> {
-    const translatedBatches: string[][] = [];
-
-    for (let i = 0; i < batches.length; i++) {
-      const batch = batches[i];
-      const batchItemCount = batch.length;
-      const batchTotalLength = batch.reduce(
-        (sum, text) => sum + text.length,
-        0
-      );
-
-      if (batches.length > 1) {
-        console.log(
-          `Translating batch ${i + 1}/${
-            batches.length
-          } (${batchItemCount} items, ${batchTotalLength} characters)...`
+    // 首先检查缓存
+    if (this.cacheService.isEnabled()) {
+      for (let i = 0; i < texts.length; i++) {
+        const cachedTranslation = this.cacheService.get(
+          texts[i],
+          targetLanguage,
+          sourceLanguage,
+          modelToUse
         );
+
+        if (cachedTranslation) {
+          translationResults[i] = cachedTranslation;
+          // 移除详细的缓存命中日志，避免干扰进度条
+          // console.log(`Cache hit for text: "${texts[i].substring(0, 30)}${texts[i].length > 30 ? "..." : ""}"`);
+        } else {
+          textsToTranslate.push(texts[i]);
+          indexMap.push(i);
+        }
       }
 
-      const translatedBatch = await this.translateBatch(
-        batch,
-        systemPrompt,
-        model
+      console.log(
+        `Cache hits: ${texts.length - textsToTranslate.length}/${texts.length}`
       );
-      translatedBatches.push(translatedBatch);
+    } else {
+      textsToTranslate.push(...texts);
+      indexMap.push(...Array.from({ length: texts.length }, (_, i) => i));
     }
 
-    // Flatten the batches back into a single array
-    return translatedBatches.flat();
+    // 如果所有文本都已缓存，直接返回结果
+    if (textsToTranslate.length === 0) {
+      console.log("All translations found in cache");
+      return translationResults;
+    }
+
+    // Process texts in batches based on text length to avoid token limits
+    const batches = this.createBatches(
+      textsToTranslate,
+      maxBatchLength as number
+    );
+    console.log(`Created ${batches.length} batches for translation`);
+
+    // 翻译未缓存的文本
+    // 使用并行处理批次，默认并发数为1（相当于顺序处理）
+    const parallelRequests = concurrentRequests || 1;
+    const newTranslations = await this.translateBatchesParallel(
+      batches,
+      systemPrompt,
+      modelToUse,
+      parallelRequests
+    );
+
+    // 将新翻译结果添加到缓存并合并到最终结果
+    if (this.cacheService.isEnabled()) {
+      for (let i = 0; i < newTranslations.length; i++) {
+        const originalIndex = indexMap[i];
+        const originalText = textsToTranslate[i];
+        const translation = newTranslations[i];
+
+        // 添加到缓存
+        this.cacheService.set(
+          originalText,
+          translation,
+          targetLanguage,
+          sourceLanguage,
+          modelToUse
+        );
+
+        // 添加到结果
+        translationResults[originalIndex] = translation;
+      }
+    } else {
+      // 如果缓存未启用，直接返回翻译结果
+      return newTranslations;
+    }
+
+    return translationResults;
   }
 
   /**
@@ -163,12 +200,6 @@ export class TranslationService {
         const batchIndex = currentBatchIndex++;
         const batch = batches[batchIndex];
 
-        const batchItemCount = batch.length;
-        const batchTotalLength = batch.reduce(
-          (sum, text) => sum + text.length,
-          0
-        );
-
         try {
           const translatedBatch = await this.translateBatch(
             batch,
@@ -191,10 +222,6 @@ export class TranslationService {
     // 创建并发处理器
     const processors: Promise<void>[] = [];
     const actualConcurrency = Math.min(concurrentRequests, batches.length);
-
-    console.log(
-      `Starting ${actualConcurrency} concurrent translation processors`
-    );
 
     for (let i = 0; i < actualConcurrency; i++) {
       processors.push(processBatch());
@@ -361,5 +388,21 @@ Example response format: { "translations": ["translated text 1", "translated tex
 `;
 
     return prompt;
+  }
+
+  /**
+   * 获取缓存服务实例
+   * @returns 缓存服务实例
+   */
+  public getCacheService(): CacheService {
+    return this.cacheService;
+  }
+
+  /**
+   * 获取当前使用的模型
+   * @returns 当前使用的模型名称
+   */
+  public getModel(): string {
+    return this.model;
   }
 }

@@ -91,10 +91,18 @@ class SrtTranslator {
         baseUrl,
         maxBatchLength,
         concurrentRequests,
+        enableCache,
+        cacheDir,
       } = options;
 
-      // Initialize translationService
-      this.translationService = new TranslationService(apiKey, baseUrl, model);
+      // Initialize translationService (先初始化服务，再输出信息)
+      this.translationService = new TranslationService(
+        apiKey,
+        baseUrl,
+        model,
+        enableCache,
+        cacheDir
+      );
 
       // Validate input file
       if (!(await FileUtils.fileExists(input))) {
@@ -112,9 +120,14 @@ class SrtTranslator {
       // Ensure output directory exists
       await FileUtils.ensureDirectoryExists(path.dirname(outputPath));
 
+      // 输出初始信息 (移到服务初始化之后)
       console.log(`Translating file: ${input}`);
       console.log(`Target language: ${targetLanguage}`);
       console.log(`Output file: ${outputPath}`);
+      console.log(`Cache: ${enableCache ? "enabled (disk)" : "disabled"}`);
+      if (enableCache) {
+        console.log(`Cache directory: ${cacheDir}`);
+      }
 
       // 创建解析进度条
       this.createProgressBar(1, "Parsing subtitles");
@@ -132,8 +145,14 @@ class SrtTranslator {
       // Use initialized translationService
       const translationService = this.translationService;
 
-      // 创建翻译进度条
+      // 在创建进度条前输出翻译信息
       console.log("Starting translation...");
+      console.log(
+        `Using translation model: ${model || translationService.getModel()}`
+      );
+      console.log(`Concurrent requests: ${concurrentRequests}`);
+
+      // 创建翻译进度条
       this.createProgressBar(textsToTranslate.length, "Translation progress");
 
       // 创建一个包装的翻译服务，用于更新进度条
@@ -204,6 +223,11 @@ class SrtTranslator {
       textsToTranslate: string[],
       translationOptions: TranslationOptions
     ): Promise<string[]> => {
+      // 在调用原始方法前暂停进度条，避免输出混乱
+      if (this.progressBar) {
+        this.progressBar.stop();
+      }
+
       // 调用原始方法
       const result = await originalTranslateTexts(
         textsToTranslate,
@@ -212,7 +236,11 @@ class SrtTranslator {
 
       // 更新进度
       completedCount += textsToTranslate.length;
-      this.updateProgressBar(completedCount);
+
+      // 重新启动进度条并更新进度
+      if (this.progressBar) {
+        this.progressBar.start(texts.length, completedCount);
+      }
 
       return result;
     };
@@ -360,6 +388,8 @@ function setupCli(): Command {
       "-c, --concurrent-requests <number>",
       "Number of concurrent translation requests"
     )
+    .option("--no-cache", "Disable translation caching")
+    .option("--cache-dir <path>", "Directory to store translation cache")
     .option("-v, --verbose", "Enable verbose logging")
     .action(async (input, rawOptions) => {
       const translator = new SrtTranslator(rawOptions.verbose);
@@ -398,6 +428,8 @@ function setupCli(): Command {
       "-c, --concurrent-requests <number>",
       "Number of concurrent translation requests"
     )
+    .option("--no-cache", "Disable translation caching")
+    .option("--cache-dir <path>", "Directory to store translation cache")
     .option("--parallel", "Process files in parallel")
     .option("-v, --verbose", "Enable verbose logging")
     .action(async (patterns, rawOptions) => {
@@ -417,6 +449,8 @@ function setupCli(): Command {
 Examples:
   $ srt-translator translate movie.srt -t Chinese          # Translate movie.srt to Chinese
   $ srt-translator translate movie.srt -t Chinese -c 3     # Translate with 3 concurrent requests
+  $ srt-translator translate movie.srt -t Chinese --no-cache # Translate without using cache
+  $ srt-translator translate movie.srt -t Chinese --cache-dir ./my-cache # Use custom cache directory
   $ srt-translator batch "**/*.srt" -t French              # Translate all SRT files to French
   $ srt-translator batch "movies/*.srt" -t German --parallel # Translate all SRTs in parallel
   $ srt-translator batch "movies/*.srt" -t German -c 5     # Translate with 5 concurrent requests
