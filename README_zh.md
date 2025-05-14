@@ -77,11 +77,12 @@ node dist/index.js path/to/subtitles.srt
   -c, --concurrency <number> 并发处理的批次数 (默认: 10)
   --glossary-in <file>       输入术语表JSON文件路径
   --glossary-out <file>      输出术语表JSON文件路径
+  --no-extract-glossary      跳过术语表提取，如果提供了glossary-in则直接使用
   -V, --version              输出版本号
   -h, --help                 显示帮助信息
 ```
 
-注意：`--glossary-in` 和 `--glossary-out` 选项不能同时使用。
+注意：当指定 `--glossary-out` 时，程序将提取术语表并退出，不执行翻译。当指定 `--no-extract-glossary` 时，程序将跳过术语表提取，如果提供了 `--glossary-in` 则直接使用该术语表。
 
 ### 示例
 
@@ -127,12 +128,32 @@ node dist/index.js subtitles.srt --glossary-out glossary.json
 node dist/index.js subtitles.srt --glossary-in glossary.json
 ```
 
+使用已有术语表作为基础并提取额外术语:
+
+```bash
+node dist/index.js subtitles.srt --glossary-in base-glossary.json --glossary-out extended-glossary.json
+```
+
+跳过术语表提取并直接使用已有术语表:
+
+```bash
+node dist/index.js subtitles.srt --glossary-in glossary.json --no-extract-glossary
+```
+
+完全跳过术语表提取（不使用任何术语表）:
+
+```bash
+node dist/index.js subtitles.srt --no-extract-glossary
+```
+
 ### 术语表管理
 
 工具支持以JSON格式导出和导入术语表：
 
 - **导出**：使用 `--glossary-out` 从字幕文件中提取并保存术语表，此操作不会执行翻译
 - **导入**：使用 `--glossary-in` 在翻译过程中应用之前提取的术语表
+- **扩展**：同时使用 `--glossary-in` 和 `--glossary-out` 加载基础术语表，提取额外术语，并保存扩展后的术语表
+- **跳过提取**：使用 `--no-extract-glossary` 跳过术语表提取过程，直接使用提供的术语表
 
 此功能允许您在多个字幕文件或翻译项目之间保持术语一致性。
 

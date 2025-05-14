@@ -4,26 +4,10 @@ import cliProgress from 'cli-progress'
 import { Command } from 'commander'
 import fs from 'fs'
 import path from 'path'
+import { globSync } from 'glob'
 
 import { dumpSrt, Srt, SubtitleItem } from './lib/srt'
 import { Translator } from './lib/translate'
-
-/**
- * 翻译配置接口
- */
-export interface TranslationConfig {
-  inputFile: string
-  outputFile: string
-  sourceLanguage: string
-  targetLanguage: string
-  model: string
-  maxLength: number
-  concurrency: number
-  apiKey: string
-  apiBaseUrl?: string
-  glossaryInputFile?: string
-  glossaryOutputFile?: string
-}
 
 const DEFAULT_MAX_LENGTH = 2000
 const DEFAULT_CONCURRENCY = 10
@@ -44,158 +28,13 @@ const getVersion = (): string => {
   }
 }
 
-/**
- * 主程序入口
- * @param config 翻译配置对象
- */
-const processSubtitles = async (config: TranslationConfig): Promise<void> => {
-  const {
-    inputFile,
-    outputFile,
-    sourceLanguage,
-    targetLanguage,
-    model,
-    maxLength,
-    concurrency,
-    apiKey,
-    apiBaseUrl,
-    glossaryInputFile,
-    glossaryOutputFile,
-  } = config
-
-  try {
-    if (!fs.existsSync(inputFile)) {
-      console.error(`Error: Input file "${inputFile}" does not exist`)
-      process.exit(1)
-    }
-
-    const srtContent = fs.readFileSync(inputFile, 'utf8')
-    const srt = new Srt(srtContent)
-    const subtitles = srt.subtitles
-
-    const batches: SubtitleItem[][] = []
-    let currentBatchLength = 0
-    let currentBatch: SubtitleItem[] = []
-
-    console.log(`Total ${subtitles.length} subtitles to process`)
-    for (const subtitle of subtitles) {
-      if (currentBatchLength + subtitle.text.join('\n').length > maxLength) {
-        batches.push(currentBatch)
-        currentBatch = []
-        currentBatchLength = 0
-      }
-
-      currentBatch.push(subtitle)
-      currentBatchLength += subtitle.text.join('\n').length
-    }
-
-    if (currentBatch.length > 0) {
-      batches.push(currentBatch)
-    }
-    console.log(`Total ${batches.length} batches to process`)
-
-    // 创建翻译器实例
-    const translator = new Translator(model, apiKey, apiBaseUrl)
-
-    // 初始化术语表
-    let glossary: Record<string, string> = {}
-
-    // 如果提供了术语表输入文件，则从文件加载术语表
-    if (glossaryInputFile) {
-      try {
-        console.log(`Loading glossary from ${glossaryInputFile}...`)
-        const glossaryContent = fs.readFileSync(glossaryInputFile, 'utf8')
-        glossary = JSON.parse(glossaryContent)
-        console.log(`Loaded ${Object.keys(glossary).length} glossary terms`)
-      } catch (error) {
-        console.error(`Error loading glossary file: ${error}`)
-        process.exit(1)
-      }
-    } else {
-      // 否则提取术语表
-      console.log('Extracting glossary...')
-
-      let progress = new cliProgress.SingleBar({
-        format: 'Extracting glossary: {bar} | {percentage}% | {value}/{total} | ETA: {eta}s',
-      })
-      progress.start(batches.length, 0)
-
-      // 直接遍历所有批次进行串行处理
-      for (const batch of batches) {
-        const result = await translator.extractGlossary({
-          subtitles: batch,
-          sourceLanguage,
-          targetLanguage,
-          existingGlossary: glossary, // 传入当前累积的术语表
-        })
-        glossary = result // 使用返回的完整合并后的术语表更新glossary
-        progress.increment()
-      }
-      progress.stop()
-      console.log('Glossary extraction completed')
-
-      // 如果提供了术语表输出文件，则保存术语表
-      if (glossaryOutputFile) {
-        try {
-          console.log(`Saving glossary to ${glossaryOutputFile}...`)
-          fs.writeFileSync(glossaryOutputFile, JSON.stringify(glossary, null, 2))
-          console.log(`Glossary saved with ${Object.keys(glossary).length} terms`)
-
-          // 如果指定了glossaryOutputFile，则只进行术语表导出操作
-          console.log('Only glossary extraction was requested. Skipping translation.')
-          return
-        } catch (error) {
-          console.error(`Error saving glossary file: ${error}`)
-        }
-      }
-    }
-
-    let progress = new cliProgress.SingleBar({
-      format: 'Translation: {bar} | {percentage}% | {value}/{total} | ETA: {eta}s',
-    })
-    progress.start(batches.length, 0)
-    let results: Record<string, string> = {}
-    for (let i = 0; i < batches.length; i += concurrency) {
-      const batchPromises = batches.slice(i, i + concurrency).map(async (batch, index) => {
-        try {
-          const batchResult = await translator.translateText({
-            subtitles: batch,
-            glossary,
-            sourceLanguage,
-            targetLanguage,
-          })
-          progress.increment()
-          results = { ...results, ...batchResult }
-        } catch (error) {
-          console.error(`Batch ${i + index + 1} processing failed:`, error)
-          return {}
-        }
-      })
-      await Promise.all(batchPromises)
-    }
-    progress.stop()
-
-    const translatedSrtContent = dumpSrt(
-      subtitles.map((subtitle) => ({
-        ...subtitle,
-        text: results[subtitle.hash]?.split('\n') || subtitle.text,
-      })),
-    )
-    fs.writeFileSync(outputFile, translatedSrtContent)
-    console.log(`Translation completed, saved to ${outputFile}`)
-  } catch (error) {
-    console.error('Error occurred during processing:', error)
-    process.exit(1)
-  }
-}
-
 const program = new Command()
 
 program.name('srt-translator').description('CLI tool for translating SRT subtitle files using AI').version(getVersion())
 
 program
-  .argument('<inputFile>', 'Path to the input SRT file')
-  .option('-o, --output <file>', 'Path to the output SRT file (defaults to input filename with prefix)')
+  .argument('<inputFiles...>', 'Path(s) or glob pattern(s) for input SRT file(s)')
+  .option('-o, --output <path>', 'Path to the output file or directory (defaults to input filename with prefix or input directory)')
   .option('-s, --source <language>', `Source language (default: "${DEFAULT_SOURCE_LANGUAGE}")`)
   .option('-t, --target <language>', `Target language (default: "${DEFAULT_TARGET_LANGUAGE}")`)
   .option('-m, --model <name>', `AI model name (default: "${DEFAULT_MODEL}")`)
@@ -216,8 +55,9 @@ program
   )
   .option('--glossary-in <file>', 'Path to input glossary JSON file')
   .option('--glossary-out <file>', 'Path to output glossary JSON file')
+  .option('--no-extract-glossary', 'Skip glossary extraction, use glossary-in directly if provided')
   .option('--no-progress', 'Disable progress bar display')
-  .action(async (inputFile, options) => {
+  .action(async (inputPatterns, options) => {
     const sourceLanguage = options.source || DEFAULT_SOURCE_LANGUAGE
     const targetLanguage = options.target || DEFAULT_TARGET_LANGUAGE
     const model = options.model || DEFAULT_MODEL
@@ -227,12 +67,36 @@ program
     const apiBaseUrl = options.apiBaseUrl
     const glossaryInputFile = options.glossaryIn
     const glossaryOutputFile = options.glossaryOut
+    const noProgress = options.noProgress === true // Commander options might be true or undefined
 
-    // 检查两个术语表参数是否同时指定
-    if (glossaryInputFile && glossaryOutputFile) {
-      console.error('Error: --glossary-in and --glossary-out options cannot be used together.')
+    // Resolve input files using glob
+    let allInputFiles: string[] = []
+    for (const pattern of inputPatterns) {
+      try {
+        const files = globSync(pattern, { nodir: true, absolute: true, windowsPathsNoEscape: true })
+        allInputFiles.push(...files)
+      } catch (e) {
+        console.warn(`Warning: Error processing glob pattern "${pattern}": ${e}`)
+      }
+    }
+    // Remove duplicates and ensure files exist before further processing
+    allInputFiles = [...new Set(allInputFiles)].filter(file => {
+      if (fs.existsSync(file)) {
+        return true
+      }
+      console.warn(`Warning: Input file "${file}" resolved by glob does not exist. Skipping.`)
+      return false
+    })
+
+
+    if (allInputFiles.length === 0) {
+      console.error('Error: No input files found or all resolved files do not exist.')
       process.exit(1)
     }
+
+    console.log(`Found ${allInputFiles.length} input file(s):`)
+    allInputFiles.forEach(file => console.log(`  - ${file}`))
+
 
     if (!apiKey) {
       const envApiKey = process.env.OPENAI_API_KEY
@@ -253,47 +117,259 @@ program
       }
     }
 
-    let outputFile = options.output
-    if (!outputFile) {
-      const inputExt = path.extname(inputFile)
-      const inputBase = path.basename(inputFile, inputExt)
-      const inputDir = path.dirname(inputFile)
-      outputFile = path.join(inputDir, `${inputBase}-${targetLanguage}-${model}${inputExt}`)
-    }
+    const userOutputPath = options.output
 
-    console.log(`Input file: ${inputFile}`)
-    console.log(`Output file: ${outputFile}`)
     console.log(`Source language: ${sourceLanguage}`)
     console.log(`Target language: ${targetLanguage}`)
     console.log(`AI model: ${model}`)
     console.log(`Max characters per batch: ${maxLength}`)
     console.log(`Concurrent batches: ${concurrency}`)
-    if (finalApiBaseUrl) {
-      console.log(`API base URL: ${finalApiBaseUrl}`)
-    }
-    if (glossaryInputFile) {
-      console.log(`Glossary input file: ${glossaryInputFile}`)
-    }
-    if (glossaryOutputFile) {
-      console.log(`Glossary output file: ${glossaryOutputFile}`)
-    }
+    if (finalApiBaseUrl) console.log(`API base URL: ${finalApiBaseUrl}`)
+    if (glossaryInputFile) console.log(`Glossary input file: ${glossaryInputFile}`)
+    if (glossaryOutputFile) console.log(`Glossary output file: ${glossaryOutputFile}`)
+    if (noProgress) console.log('Progress bar disabled.')
     console.log('----------------------------')
 
-    const config: TranslationConfig = {
-      inputFile,
-      outputFile,
-      sourceLanguage,
-      targetLanguage,
-      model,
-      maxLength,
-      concurrency,
-      apiKey,
-      apiBaseUrl: finalApiBaseUrl,
-      glossaryInputFile,
-      glossaryOutputFile,
+    const translator = new Translator(model, apiKey, finalApiBaseUrl)
+    let masterGlossary: Record<string, string> = {}
+
+    // --- Stage 1: Glossary Handling ---
+    console.log(options)
+    const extractGlossary = options.extractGlossary
+
+    // 加载输入术语表（如果提供）
+    if (glossaryInputFile) {
+      try {
+        console.log(`Loading glossary from ${glossaryInputFile}...`)
+        const glossaryContent = fs.readFileSync(glossaryInputFile, 'utf8')
+        masterGlossary = JSON.parse(glossaryContent)
+        console.log(`Loaded ${Object.keys(masterGlossary).length} glossary terms.`)
+      } catch (error) {
+        console.error(`Error loading glossary file: ${error}`)
+        process.exit(1)
+      }
     }
 
-    await processSubtitles(config)
+    // 如果指定了跳过术语表提取，则直接进入翻译阶段
+    if (extractGlossary) {
+      // 提取术语表
+      console.log('Extracting master glossary from all input files...')
+      const allSubtitleItemsForGlossary: SubtitleItem[] = []
+      for (const inputFile of allInputFiles) {
+        // Existence already checked, but double check doesn't hurt if files change mid-run
+        if (!fs.existsSync(inputFile)) {
+          console.warn(`Warning: Input file "${inputFile}" vanished before glossary extraction. Skipping.`)
+          continue
+        }
+        try {
+          const srtContent = fs.readFileSync(inputFile, 'utf8')
+          const srt = new Srt(srtContent)
+          allSubtitleItemsForGlossary.push(...srt.subtitles)
+        } catch (error) {
+          console.error(`Error reading or parsing SRT file ${inputFile} for glossary: ${error}`)
+        }
+      }
+
+      if (allSubtitleItemsForGlossary.length > 0) {
+        const glossaryBatches: SubtitleItem[][] = []
+        let currentBatchLength = 0
+        let currentBatch: SubtitleItem[] = []
+        for (const subtitle of allSubtitleItemsForGlossary) {
+          const textLength = subtitle.text.join('\n').length
+          if (currentBatchLength + textLength > maxLength && currentBatch.length > 0) {
+            glossaryBatches.push(currentBatch)
+            currentBatch = []
+            currentBatchLength = 0
+          }
+          currentBatch.push(subtitle)
+          currentBatchLength += textLength
+        }
+        if (currentBatch.length > 0) glossaryBatches.push(currentBatch)
+
+        console.log(`Extracting glossary from ${allSubtitleItemsForGlossary.length} subtitles in ${glossaryBatches.length} batches.`)
+        
+        let glossaryProgress: cliProgress.SingleBar | undefined
+        if (!noProgress) {
+          glossaryProgress = new cliProgress.SingleBar({
+            format: 'Extracting master glossary: {bar} | {percentage}% | {value}/{total} | ETA: {eta}s',
+          })
+          glossaryProgress.start(glossaryBatches.length, 0)
+        }
+
+        for (const batch of glossaryBatches) {
+          try {
+            const result = await translator.extractGlossary({
+              subtitles: batch,
+              sourceLanguage,
+              targetLanguage,
+              existingGlossary: masterGlossary,
+            })
+            masterGlossary = result
+          } catch (error) {
+             console.error(`Error during glossary extraction for a batch: ${error}`)
+          }
+          glossaryProgress?.increment()
+        }
+        glossaryProgress?.stop()
+        console.log(`Master glossary extraction completed. Total ${Object.keys(masterGlossary).length} terms.`)
+      } else {
+        console.log('No subtitles found across all files to extract master glossary.')
+      }
+
+      // 如果提供了输出术语表文件，保存术语表并退出
+      if (glossaryOutputFile) {
+        try {
+          console.log(`Saving master glossary to ${glossaryOutputFile}...`)
+          fs.writeFileSync(glossaryOutputFile, JSON.stringify(masterGlossary, null, 2))
+          console.log(`Master glossary saved with ${Object.keys(masterGlossary).length} terms.`)
+          console.log('Glossary extraction and saving complete. Exiting as per --glossary-out option.')
+          process.exit(0)
+        } catch (error) {
+          console.error(`Error saving master glossary file: ${error}`)
+          process.exit(1) // Exit with error if saving failed
+        }
+      }
+    } else {
+      console.log('Skipping glossary extraction as --no-extract-glossary is specified.')
+      if (glossaryOutputFile) {
+        console.log('Warning: --glossary-out is ignored when --no-extract-glossary is specified.')
+      }
+    } 
+
+    // --- Stage 2: Translation ---
+    // This stage is skipped if glossaryOutputFile was set and glossaryInputFile was not (due to process.exit(0) above).
+    
+    if (allInputFiles.length > 1 && userOutputPath && fs.existsSync(userOutputPath) && fs.statSync(userOutputPath).isFile()) {
+      console.error(`Error: Output path "${userOutputPath}" is an existing file, but multiple input files were provided. Please specify an output directory.`)
+      process.exit(1)
+    }
+    
+    console.log('\nStarting translation process for each file...')
+    for (const inputFile of allInputFiles) {
+      let outputFilePath = userOutputPath
+
+      if (allInputFiles.length > 1) {
+        const inputBase = path.basename(inputFile, path.extname(inputFile))
+        const defaultOutputName = `${inputBase}-${targetLanguage}-${model}${path.extname(inputFile)}`
+        if (userOutputPath) {
+          if (!fs.existsSync(userOutputPath)) {
+            try {
+              fs.mkdirSync(userOutputPath, { recursive: true })
+              console.log(`Created output directory: ${userOutputPath}`)
+            } catch (e) {
+              console.error(`Error creating output directory ${userOutputPath}: ${e}. Skipping file ${inputFile}.`)
+              continue
+            }
+          } else if (!fs.statSync(userOutputPath).isDirectory()) {
+            console.error(`Error: Output path "${userOutputPath}" exists but is not a directory. Skipping file ${inputFile}.`)
+            continue
+          }
+          outputFilePath = path.join(userOutputPath, defaultOutputName)
+        } else {
+          outputFilePath = path.join(path.dirname(inputFile), defaultOutputName)
+        }
+      } else { // Single input file
+        if (!outputFilePath) {
+          const inputExt = path.extname(inputFile)
+          const inputBase = path.basename(inputFile, inputExt)
+          const inputDir = path.dirname(inputFile)
+          outputFilePath = path.join(inputDir, `${inputBase}-${targetLanguage}-${model}${inputExt}`)
+        }
+      }
+
+      console.log(`\nTranslating file: ${inputFile}`)
+      console.log(`Outputting to: ${outputFilePath}`)
+
+      if (!fs.existsSync(inputFile)) {
+        console.error(`Error: Input file "${inputFile}" does not exist at translation stage. Skipping.`)
+        continue
+      }
+      
+      let srtContent, srt, subtitles;
+      try {
+        srtContent = fs.readFileSync(inputFile, 'utf8')
+        srt = new Srt(srtContent)
+        subtitles = srt.subtitles
+      } catch (error) {
+        console.error(`Error reading or parsing SRT file ${inputFile} for translation: ${error}. Skipping.`)
+        continue
+      }
+
+
+      if (subtitles.length === 0) {
+        console.log('No subtitles to translate in this file. Writing empty SRT.')
+        try {
+          fs.writeFileSync(outputFilePath, '')
+        } catch (error) {
+          console.error(`Error writing empty SRT to ${outputFilePath}: ${error}`)
+        }
+        continue
+      }
+
+      const translationBatches: SubtitleItem[][] = []
+      let currentBatchLength = 0
+      let currentBatch: SubtitleItem[] = []
+      for (const subtitle of subtitles) {
+        const textLength = subtitle.text.join('\n').length
+        if (currentBatchLength + textLength > maxLength && currentBatch.length > 0) {
+          translationBatches.push(currentBatch)
+          currentBatch = []
+          currentBatchLength = 0
+        }
+        currentBatch.push(subtitle)
+        currentBatchLength += textLength
+      }
+      if (currentBatch.length > 0) translationBatches.push(currentBatch)
+
+      console.log(`Translating ${subtitles.length} subtitles in ${translationBatches.length} batches for this file.`)
+      
+      let translationProgress: cliProgress.SingleBar | undefined
+      if (!noProgress) {
+        translationProgress = new cliProgress.SingleBar({
+          format: `Translating ${path.basename(inputFile)}: {bar} | {percentage}% | {value}/{total} | ETA: {eta}s`,
+        })
+        translationProgress.start(translationBatches.length, 0)
+      }
+
+      let translatedResults: Record<string, string> = {}
+      const batchProcessingPromises: Promise<void>[] = []
+
+      for (let i = 0; i < translationBatches.length; i += concurrency) {
+        const concurrentBatchGroup = translationBatches.slice(i, i + concurrency)
+        const batchPromises = concurrentBatchGroup.map(async (batch) => {
+          try {
+            const batchResult = await translator.translateText({
+              subtitles: batch,
+              glossary: masterGlossary,
+              sourceLanguage,
+              targetLanguage,
+            })
+            // Ensure thread-safe update to translatedResults if this were truly parallel in Node.js
+            // For async/await with Promise.all, direct assignment is fine here.
+            Object.assign(translatedResults, batchResult)
+          } catch (error) {
+            console.error(`Error translating a batch for ${inputFile}:`, error)
+          }
+          translationProgress?.increment()
+        })
+        batchProcessingPromises.push(...batchPromises)
+      }
+      await Promise.all(batchProcessingPromises)
+      translationProgress?.stop()
+
+      const translatedSrtItems = subtitles.map((subtitle) => ({
+        ...subtitle,
+        text: translatedResults[subtitle.hash]?.split('\n') || subtitle.text,
+      }))
+      const translatedSrtContent = dumpSrt(translatedSrtItems)
+      try {
+        fs.writeFileSync(outputFilePath, translatedSrtContent)
+        console.log(`Translation completed for ${inputFile}, saved to ${outputFilePath}`)
+      } catch (error) {
+        console.error(`Error writing translated SRT to ${outputFilePath}: ${error}`)
+      }
+    }
+    console.log('\nAll files processed.')
   })
 
 program.parse(process.argv)

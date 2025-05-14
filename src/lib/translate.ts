@@ -40,7 +40,7 @@ export class Translator {
     if (missingHashes.length > 0) {
       const missingCount = missingHashes.length
       const totalCount = originalHashes.length
-      console.log(`${missingCount}/${totalCount} subtitles not translated, will attempt to translate them again.`)
+      console.log(`\n${missingCount}/${totalCount} subtitles not translated, will attempt to translate them again.`)
       for (const hash of missingHashes) {
         console.log(`Untranslated subtitle: ${originalMap[hash]}`)
       }
@@ -186,7 +186,10 @@ export class Translator {
         throw new Error('OpenAI returned empty glossary extraction result')
       }
 
-      return JSON.parse(completion)
+      const newGlossary = JSON.parse(completion) as Record<string, string>
+      // 合并已有术语表和新术语表
+      const mergedGlossary = existingGlossary ? { ...existingGlossary, ...newGlossary } : newGlossary
+      return mergedGlossary
     } catch (error) {
       console.error('Error during glossary extraction:', error)
       throw error

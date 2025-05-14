@@ -61,8 +61,10 @@
     "typescript": "^5.8.2"
   },
   "dependencies": {
+    "@types/glob": "^8.1.0",
     "cli-progress": "^3.12.0",
     "commander": "^13.1.0",
+    "glob": "^11.0.2",
     "openai": "^4.87.3"
   },
   "bin": "./dist/index.js",

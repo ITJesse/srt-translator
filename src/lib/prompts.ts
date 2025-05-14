@@ -97,7 +97,7 @@ export const extractGlossaryPrompt = (
   const existingGlossarySection =
     existingGlossary && Object.keys(existingGlossary).length > 0
       ? `
-已有术语表（请优先使用以下翻译，并将它们完整包含在最终输出中。你的主要任务是识别并翻译字幕文本中出现、但此表中【未曾】列出的新专有名词和人名。最终返回的JSON对象应该是已有术语表和新识别术语的合并结果）：
+已有术语表（请参考以下翻译，但不要将它们包含在最终输出中。你的主要任务是识别并翻译字幕文本中出现、但此表中【未曾】列出的新专有名词和人名。最终返回的JSON对象应该只包含新识别的术语，不包含已有术语表中的内容）：
 ${Object.entries(existingGlossary)
   .map(([source, target]) => `- "${source}" → "${target}"`)
   .join('\n')}
@@ -110,7 +110,7 @@ ${existingGlossarySection}
 你的任务是：
 1. 识别所有专有名词、人名、地名、组织名和重要术语。
 2. 为每个识别出的词汇提供准确的${targetLanguage}翻译。
-3. 如果提供了“已有术语表”，请将其中所有条目完整包含在最终输出中，并专注于翻译文本中出现但术语表中未包含的新词汇。
+3. 如果提供了"已有术语表"，请参考其中的翻译，但不要将它们包含在最终输出中，只专注于翻译文本中出现但术语表中未包含的新词汇。
 4. 以JSON格式输出结果。
 
 遵循以下规则：
@@ -145,10 +145,8 @@ ${existingGlossarySection}
 输入字幕文本：
 "Luke Skywalker activated his lightsaber. The Jedi Knight was ready to face Darth Vader on the Death Star. Princess Leia Organa watched from afar."
 
-输出（合并已有术语和新提取的术语，并优先使用已有术语表的翻译）：
+输出（只包含新识别的术语，不包含已有术语表中的内容）：
 {
-  "Luke Skywalker": "卢克·天行者",
-  "Jedi Knight": "绝地",
   "lightsaber": "光剑",
   "Darth Vader": "达斯·维德",
   "Death Star": "死星",
