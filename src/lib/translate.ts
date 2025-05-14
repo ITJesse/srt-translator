@@ -158,11 +158,17 @@ export class Translator {
     subtitles: SubtitleItem[]
     sourceLanguage?: string
     targetLanguage?: string
+    existingGlossary?: Record<string, string>
   }): Promise<Record<string, string>> {
-    const { subtitles, sourceLanguage = 'english', targetLanguage = 'chinese' } = config
+    const {
+      subtitles,
+      sourceLanguage = 'english',
+      targetLanguage = 'chinese',
+      existingGlossary,
+    } = config
 
     try {
-      const prompt = extractGlossaryPrompt(sourceLanguage, targetLanguage)
+      const prompt = extractGlossaryPrompt(sourceLanguage, targetLanguage, existingGlossary)
       const subtitleText = subtitles.map((subtitle) => subtitle.text.join('\n')).join('\n')
 
       const response = await this.openai.chat.completions.create({

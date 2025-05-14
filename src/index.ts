@@ -120,17 +120,16 @@ const processSubtitles = async (config: TranslationConfig): Promise<void> => {
       })
       progress.start(batches.length, 0)
 
-      for (let i = 0; i < batches.length; i += concurrency) {
-        const batchPromises = batches.slice(i, i + concurrency).map(async (batch) => {
-          const result = await translator.extractGlossary({
-            subtitles: batch,
-            sourceLanguage,
-            targetLanguage,
-          })
-          glossary = { ...glossary, ...result }
-          progress.increment()
+      // 直接遍历所有批次进行串行处理
+      for (const batch of batches) {
+        const result = await translator.extractGlossary({
+          subtitles: batch,
+          sourceLanguage,
+          targetLanguage,
+          existingGlossary: glossary, // 传入当前累积的术语表
         })
-        await Promise.all(batchPromises)
+        glossary = result // 使用返回的完整合并后的术语表更新glossary
+        progress.increment()
       }
       progress.stop()
       console.log('Glossary extraction completed')

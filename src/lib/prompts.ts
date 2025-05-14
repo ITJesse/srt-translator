@@ -86,30 +86,48 @@ ${glossarySection}
  * 获取用于从字幕中提取专有名词和人名的提示词
  * @param sourceLanguage 源语言
  * @param targetLanguage 目标语言
+ * @param existingGlossary 可选的已有术语表 {源语言词汇: 目标语言对应}
  * @returns 提取专有名词和人名的提示词
  */
-export const extractGlossaryPrompt = (sourceLanguage: string, targetLanguage: string): string => {
-  return `你是一位专业的字幕分析专家，擅长从${sourceLanguage}影视作品字幕中识别专有名词和人名并提供准确的${targetLanguage}翻译。
+export const extractGlossaryPrompt = (
+  sourceLanguage: string,
+  targetLanguage: string,
+  existingGlossary?: Record<string, string>,
+): string => {
+  const existingGlossarySection =
+    existingGlossary && Object.keys(existingGlossary).length > 0
+      ? `
+已有术语表（请优先使用以下翻译，并将它们完整包含在最终输出中。你的主要任务是识别并翻译字幕文本中出现、但此表中【未曾】列出的新专有名词和人名。最终返回的JSON对象应该是已有术语表和新识别术语的合并结果）：
+${Object.entries(existingGlossary)
+  .map(([source, target]) => `- "${source}" → "${target}"`)
+  .join('\n')}
+`
+      : ''
 
+  return `你是一位专业的字幕分析专家，擅长从${sourceLanguage}影视作品字幕中识别专有名词和人名并提供准确的${targetLanguage}翻译。
+${existingGlossarySection}
 你将收到一段电影或电视剧的${sourceLanguage}字幕文本。
 你的任务是：
-1. 识别所有专有名词、人名、地名、组织名和重要术语
-2. 为每个识别出的词汇提供准确的${targetLanguage}翻译
-3. 以JSON格式输出结果
+1. 识别所有专有名词、人名、地名、组织名和重要术语。
+2. 为每个识别出的词汇提供准确的${targetLanguage}翻译。
+3. 如果提供了“已有术语表”，请将其中所有条目完整包含在最终输出中，并专注于翻译文本中出现但术语表中未包含的新词汇。
+4. 以JSON格式输出结果。
 
 遵循以下规则：
-1. 专注于重要且有价值的专有名词和人名，忽略常见词汇
-2. 确保翻译符合${targetLanguage}的语言习惯和文化背景
-3. 如果某个词已有公认的官方译名，请使用官方译名
-4. 对于人名，尽量保留原音，按照${targetLanguage}的人名音译规则处理
-5. 地名应遵循权威地图或百科全书的翻译标准
-6. 虚构作品中的专有名词应考虑上下文含义进行翻译
-7. 相同的词汇应保持一致的翻译
+1. 专注于重要且有价值的专有名词和人名，忽略常见词汇。
+2. 确保翻译符合${targetLanguage}的语言习惯和文化背景。
+3. 如果某个词已有公认的官方译名，请使用官方译名。
+4. 对于人名，尽量保留原音，按照${targetLanguage}的人名音译规则处理。
+5. 地名应遵循权威地图或百科全书的翻译标准。
+6. 虚构作品中的专有名词应考虑上下文含义进行翻译。
+7. 相同的词汇应保持一致的翻译。
+8. 如果提供了“已有术语表”，则表中词汇的翻译优先，不应更改。
 
-示例输入：
+示例1（无已有术语表）：
+输入字幕文本：
 "Luke Skywalker activated his lightsaber. The Jedi Knight was ready to face Darth Vader on the Death Star."
 
-示例输出：
+输出：
 {
   "Luke Skywalker": "卢克·天行者",
   "lightsaber": "光剑",
@@ -118,10 +136,30 @@ export const extractGlossaryPrompt = (sourceLanguage: string, targetLanguage: st
   "Death Star": "死星"
 }
 
-示例输入：
+示例2（有已有术语表）：
+已有术语表：
+{
+  "Luke Skywalker": "卢克·天行者",
+  "Jedi Knight": "绝地" 
+}
+输入字幕文本：
+"Luke Skywalker activated his lightsaber. The Jedi Knight was ready to face Darth Vader on the Death Star. Princess Leia Organa watched from afar."
+
+输出（合并已有术语和新提取的术语，并优先使用已有术语表的翻译）：
+{
+  "Luke Skywalker": "卢克·天行者",
+  "Jedi Knight": "绝地",
+  "lightsaber": "光剑",
+  "Darth Vader": "达斯·维德",
+  "Death Star": "死星",
+  "Princess Leia Organa": "莱娅·奥加纳公主"
+}
+
+示例3（无已有术语表）：
+输入字幕文本：
 "Tony Stark built the first Iron Man suit in a cave with a box of scraps. Later, J.A.R.V.I.S. helped him create the Mark II."
 
-示例输出：
+输出：
 {
   "Tony Stark": "托尼·斯塔克",
   "Iron Man": "钢铁侠",
